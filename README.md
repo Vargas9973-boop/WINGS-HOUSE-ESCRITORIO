@@ -33,13 +33,6 @@ del sistema (por ejemplo `%APPDATA%/wings-house-admin` en Windows, o
 La app abre con una pantalla de inicio de sesión. Cuentas creadas por defecto
 (cámbialas desde **Cuentas** en cuanto entres como administrador):
 
-| Usuario    | Contraseña   | Rol            | Acceso                                   |
-|------------|--------------|----------------|-------------------------------------------|
-| `admin`    | `admin123`   | Administrador  | Todos los módulos                         |
-| `cajero1`  | `cajero123`  | Cajero         | Ventas y Comandas                         |
-| `cajero2`  | `cajero123`  | Cajero         | Ventas y Comandas                         |
-| `empleado` | `empleado123`| Empleado       | Registrar su entrada/salida en Asistencia |
-
 ## 3. Módulos
 
 - **Ventas**: catálogo con categorías (Alitas, Boneless, Hot-Dogs,
