@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Cuentas</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Cuentas</h1>
+          <span>Usuarios y roles del sistema</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body" style="max-width: 900px;">
+      <div class="section-toolbar">
+        <h2>Usuarios</h2>
+        <button id="btn-new-user" class="btn btn-brand">+ Nueva cuenta</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th></th></tr>
+          </thead>
+          <tbody id="users-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel" style="margin-top:24px;">
+        <div class="panel-title">Permisos por rol</div>
+        <ul style="color:var(--text-secondary); font-size:0.85rem; line-height:1.9; padding-left:18px;">
+          <li><strong>Administrador:</strong> acceso completo a todos los módulos.</li>
+          <li><strong>Cajero:</strong> Ventas y Comandas.</li>
+          <li><strong>Empleado:</strong> registrar su propia entrada y salida en Asistencia.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div id="user-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2 id="user-modal-title">Nueva cuenta</h2>
+      <input type="hidden" id="user-id">
+      <div class="form-grid">
+        <div class="field">
+          <label>Usuario</label>
+          <input type="text" id="user-username" placeholder="cajero3">
+        </div>
+        <div class="field">
+          <label>Nombre a mostrar</label>
+          <input type="text" id="user-display-name" placeholder="Nombre completo">
+        </div>
+        <div class="field">
+          <label>Rol</label>
+          <select id="user-role">
+            <option value="admin">Administrador</option>
+            <option value="cajero">Cajero</option>
+            <option value="empleado">Empleado</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Estado</label>
+          <select id="user-active">
+            <option value="1">Activo</option>
+            <option value="0">Inactivo</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label id="user-password-label">Contraseña</label>
+          <input type="text" id="user-password" placeholder="Déjalo vacío para no cambiarla">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-user">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-user">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="accounts-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Ajustes</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Ajustes</h1>
+          <span>Negocio, descuentos e impresora de tickets</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body" style="max-width: 720px;">
+      <div class="panel" style="margin-bottom:20px;">
+        <div class="panel-title">Datos del negocio (aparecen en el ticket)</div>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Nombre del negocio</label>
+            <input type="text" id="set-business-name">
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Dirección</label>
+            <input type="text" id="set-business-address">
+          </div>
+          <div class="field">
+            <label>Teléfono</label>
+            <input type="text" id="set-business-phone">
+          </div>
+          <div class="field">
+            <label>% Descuento a empleados</label>
+            <input type="number" id="set-employee-discount" min="0" max="100" step="1">
+          </div>
+          <div class="field">
+            <label>Número de mesas (Comandas)</label>
+            <input type="number" id="set-table-count" min="1" max="60" step="1">
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Impresora de tickets (equipo externo)</div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          Selecciona la impresora térmica instalada en el sistema operativo. Si no seleccionas ninguna,
+          se abrirá el diálogo de impresión de Windows/macOS/Linux para elegirla manualmente en cada venta.
+        </p>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Impresora</label>
+            <select id="set-printer-name">
+              <option value="">Preguntar cada vez (mostrar diálogo)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Ancho de papel</label>
+            <select id="set-ticket-width">
+              <option value="58">58 mm</option>
+              <option value="80">80 mm</option>
+            </select>
+          </div>
+          <div class="field" style="align-self:end;">
+            <button id="btn-refresh-printers" class="btn btn-outline">Actualizar lista</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Alerta de sonido — comandas nuevas</div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          Solo afecta a esta computadora (no se sincroniza con otras sucursales/estaciones).
+        </p>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1; display:flex; align-items:center; gap:10px;">
+            <input type="checkbox" id="set-alert-enabled" style="width:auto;">
+            <label for="set-alert-enabled" style="margin:0;">Sonido activado al llegar una comanda nueva</label>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Volumen máximo (<span id="set-alert-volume-value">100</span>%)</label>
+            <input type="range" id="set-alert-volume" min="0" max="100" step="5">
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions" style="justify-content:flex-start; margin-top:22px;">
+        <button id="btn-save-settings" class="btn btn-brand">Guardar ajustes</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="settings-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

@@ -1,0 +1,92 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  color: #1a1a1a;
+  background: #ffffff;
+  padding: 30px 40px;
+}
+
+.report-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 3px solid #e5231e;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+
+.report-header img { width: 64px; border-radius: 10px; }
+
+.report-header h1 { font-size: 1.4rem; }
+.report-header p { font-size: 0.85rem; color: #555; }
+
+.report-period {
+  font-size: 0.9rem;
+  color: #555;
+  margin-bottom: 22px;
+}
+
+h2.section-title {
+  font-size: 1.05rem;
+  margin: 26px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #ddd;
+  color: #b0141a;
+}
+
+.kpi-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.kpi-box {
+  flex: 1;
+  min-width: 140px;
+  border: 1px solid #ddd;
+  border-left: 4px solid #ff9900;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.kpi-box .label { font-size: 0.7rem; text-transform: uppercase; color: #777; font-weight: 700; }
+.kpi-box .value { font-size: 1.2rem; font-weight: 800; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+
+th, td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+th {
+  background: #f4f4f4;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: #666;
+}
+
+.report-footer {
+  margin-top: 30px;
+  font-size: 0.75rem;
+  color: #888;
+  text-align: center;
+}
+
+.empty {
+  color: #999;
+  font-size: 0.85rem;
+  padding: 8px 0;
+}
+
+@media print {
+  body { padding: 0 24px; }
+}

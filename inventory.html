@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Inventarios</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Inventarios</h1>
+          <span>Control de stock de insumos</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div id="kpi-grid" class="kpi-grid"></div>
+
+      <div class="section-toolbar">
+        <h2>Insumos</h2>
+        <button id="btn-new-item" class="btn btn-brand">+ Nuevo insumo</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Insumo</th>
+              <th>Unidad</th>
+              <th>Existencia</th>
+              <th>Mínimo</th>
+              <th>Costo/unidad</th>
+              <th>Estado</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="inventory-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="item-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2 id="item-modal-title">Nuevo insumo</h2>
+      <input type="hidden" id="item-id">
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Nombre</label>
+          <input type="text" id="item-name" placeholder="Ej. Alitas de pollo">
+        </div>
+        <div class="field">
+          <label>Unidad</label>
+          <input type="text" id="item-unit" placeholder="kg, pza, lt...">
+        </div>
+        <div class="field">
+          <label>Existencia actual</label>
+          <input type="number" id="item-stock" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Stock mínimo</label>
+          <input type="number" id="item-min-stock" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Costo por unidad</label>
+          <input type="number" id="item-cost" min="0" step="0.01">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-item">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-item">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="inventory-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "wings-house-admin",
+  "version": "2.2.0",
+  "description": "Sistema administrativo Wings House - Ventas, Catálogo, Inventarios, Merma, Costos y Asistencia (Supabase)",
+  "main": "main.js",
+  "author": "Wings House",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1"
+  }
+}

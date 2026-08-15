@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Merma</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Merma</h1>
+          <span>Control de desperdicios y bajas de inventario</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div id="kpi-grid" class="kpi-grid"></div>
+
+      <div class="section-toolbar">
+        <h2>Historial de merma</h2>
+        <button id="btn-new-waste" class="btn btn-brand">+ Registrar merma</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Insumo / Producto</th>
+              <th>Cantidad</th>
+              <th>Motivo</th>
+              <th>Costo</th>
+            </tr>
+          </thead>
+          <tbody id="waste-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="waste-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Registrar merma</h2>
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Insumo (del inventario)</label>
+          <select id="waste-inventory"></select>
+        </div>
+        <div class="field">
+          <label>Cantidad</label>
+          <input type="number" id="waste-quantity" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Costo (opcional, se calcula automático)</label>
+          <input type="number" id="waste-cost" min="0" step="0.01" placeholder="Automático">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Motivo</label>
+          <select id="waste-reason">
+            <option value="Caducidad">Caducidad</option>
+            <option value="Error de preparación">Error de preparación</option>
+            <option value="Caída / accidente">Caída / accidente</option>
+            <option value="Devolución de cliente">Devolución de cliente</option>
+            <option value="Otro">Otro</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-waste">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-waste">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="waste-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

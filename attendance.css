@@ -1,0 +1,36 @@
+.punch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.punch-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.punch-card h3 {
+  font-size: 0.95rem;
+}
+
+.punch-card .role {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.punch-card .status {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.punch-card .status.in { color: var(--accent-success); }
+.punch-card .status.out { color: var(--text-muted); }
+
+.punch-card button {
+  width: 100%;
+}

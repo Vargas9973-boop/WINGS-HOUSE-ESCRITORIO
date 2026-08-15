@@ -1,0 +1,85 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #ffffff;
+  font-family: 'Courier New', Courier, monospace;
+  color: #000000;
+}
+
+.ticket {
+  width: 100%;
+  padding: 6px 8px 18px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ticket.ticket-80 { font-size: 13px; }
+
+.ticket .center { text-align: center; }
+.ticket .bold { font-weight: 700; }
+
+.ticket .logo {
+  display: block;
+  width: 70px;
+  margin: 0 auto 6px;
+}
+
+.ticket h1 {
+  font-size: 15px;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.ticket .biz-line {
+  text-align: center;
+  font-size: 11px;
+  margin-bottom: 1px;
+}
+
+.ticket .sep {
+  border-top: 1px dashed #000;
+  margin: 8px 0;
+}
+
+.ticket .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.ticket .items .item {
+  margin-bottom: 4px;
+}
+
+.ticket .items .item-name {
+  display: flex;
+  justify-content: space-between;
+}
+
+.ticket .items .item-detail {
+  font-size: 11px;
+  color: #333;
+}
+
+.ticket .totals .row {
+  font-size: 12.5px;
+}
+
+.ticket .totals .grand {
+  font-size: 15px;
+  font-weight: 700;
+  border-top: 1px solid #000;
+  padding-top: 4px;
+  margin-top: 4px;
+}
+
+.ticket .footer {
+  text-align: center;
+  margin-top: 12px;
+  font-size: 11px;
+}
+
+.ticket .promo-mark::before {
+  content: '★ ';
+}

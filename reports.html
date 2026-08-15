@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Reportes</title>
+  <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="costs.css">
+  <link rel="stylesheet" href="reports.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Reportes</h1>
+          <span>Resumen diario, semanal y mensual — exportación profesional</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div class="tabs-bar">
+        <button class="range-btn active" data-range="today">Hoy</button>
+        <button class="range-btn" data-range="week">Esta semana</button>
+        <button class="range-btn" data-range="month">Este mes</button>
+        <button class="range-btn" data-range="custom">Personalizado</button>
+      </div>
+
+      <div id="custom-range" class="date-filters" style="display:none; margin-bottom:18px;">
+        <input type="date" id="filter-from">
+        <span>a</span>
+        <input type="date" id="filter-to">
+        <button id="btn-apply-custom" class="btn btn-outline btn-sm">Aplicar</button>
+      </div>
+
+      <div id="kpi-grid" class="kpi-grid"></div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title">Ventas por día</div>
+          <div id="day-chart" class="bar-chart"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Ventas por método de pago</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Método</th><th>Tickets</th><th>Total</th></tr></thead>
+              <tbody id="payment-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Productos más vendidos</div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Producto</th><th>Unidades</th><th>Total</th></tr></thead>
+            <tbody id="top-products-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-toolbar" style="margin-top:28px;">
+        <h2>Exportar datos del periodo seleccionado</h2>
+      </div>
+      <div id="export-grid" class="export-grid">
+        <button class="export-card" data-type="ventas"><strong>Ventas</strong><span>Folio, mesa, totales, pago</span></button>
+        <button class="export-card" data-type="productos"><strong>Productos vendidos</strong><span>Ranking con unidades y total</span></button>
+        <button class="export-card" data-type="gastos"><strong>Gastos y costos</strong><span>Fijos, variables, insumos</span></button>
+        <button class="export-card" data-type="merma"><strong>Merma</strong><span>Bajas de inventario y costo</span></button>
+        <button class="export-card" data-type="asistencia"><strong>Asistencia</strong><span>Entradas y salidas</span></button>
+        <button class="export-card" data-type="nomina"><strong>Nómina</strong><span>Salarios y bonos por semana</span></button>
+      </div>
+
+      <div class="section-toolbar" style="margin-top:26px;">
+        <h2>Reporte profesional completo</h2>
+      </div>
+      <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+        Genera un reporte con todos los indicadores del periodo, listo para imprimir o guardar como PDF
+        desde el diálogo de impresión del sistema.
+      </p>
+      <button id="btn-print-report" class="btn btn-brand">Imprimir / Guardar como PDF</button>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="reports-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

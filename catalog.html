@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Catálogo</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Catálogo</h1>
+          <span>Productos, categorías y promociones para el punto de venta</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div class="tabs-bar">
+        <button class="tab-btn active" data-tab="products">Productos</button>
+        <button class="tab-btn" data-tab="promotions">Promociones</button>
+      </div>
+
+      <!-- TAB PRODUCTOS -->
+      <section id="tab-products" class="tab-panel">
+        <div class="section-toolbar">
+          <h2>Productos del menú</h2>
+          <button id="btn-new-product" class="btn btn-brand">+ Nuevo producto</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Precio público</th>
+                <th>Precio empleado</th>
+                <th>Existencia</th>
+                <th>Estado</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="products-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB PROMOCIONES -->
+      <section id="tab-promotions" class="tab-panel" style="display:none;">
+        <div class="section-toolbar">
+          <h2>Promociones activas en Ventas</h2>
+          <button id="btn-new-promo" class="btn btn-brand">+ Nueva promoción</button>
+        </div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          Las promociones activas aparecen en una franja destacada arriba del catálogo en el módulo de Ventas, para venderse con un solo clic.
+        </p>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Promoción</th>
+                <th>Descripción</th>
+                <th>Precio</th>
+                <th>Categoría aplicable</th>
+                <th>Estado</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="promos-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- MODAL PRODUCTO -->
+  <div id="product-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2 id="product-modal-title">Nuevo producto</h2>
+      <input type="hidden" id="product-id">
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Nombre</label>
+          <input type="text" id="product-name" placeholder="Ej. Alitas 10 pzs">
+        </div>
+        <div class="field">
+          <label>Categoría</label>
+          <select id="product-category">
+            <option value="Alitas">Alitas</option>
+            <option value="Boneless">Boneless</option>
+            <option value="hotdogs">Hot-Dogs</option>
+            <option value="hamburguesas">Hamburguesas</option>
+            <option value="papas">Papas</option>
+            <option value="acompanantes">Acompañantes</option>
+            <option value="bebidas">Bebidas</option>
+            <option value="extras">Extras</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Precio público</label>
+          <input type="number" id="product-price" min="0" step="0.01" placeholder="0.00">
+        </div>
+        <div class="field">
+          <label>Precio empleado (opcional)</label>
+          <input type="number" id="product-employee-price" min="0" step="0.01" placeholder="Automático (descuento global)">
+        </div>
+        <div class="field">
+          <label>Estado</label>
+          <select id="product-active">
+            <option value="1">Activo</option>
+            <option value="0">Inactivo</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Control de existencia (opcional)</label>
+          <input type="number" id="product-stock" min="0" step="1" placeholder="Vacío = sin límite (ilimitado)">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-product">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-product">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL PROMOCIÓN -->
+  <div id="promo-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2 id="promo-modal-title">Nueva promoción</h2>
+      <input type="hidden" id="promo-id">
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Nombre</label>
+          <input type="text" id="promo-name" placeholder="Ej. Combo 20 alitas + refresco 2L">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Descripción</label>
+          <textarea id="promo-description" rows="2" placeholder="Detalle breve de la promoción"></textarea>
+        </div>
+        <div class="field">
+          <label>Precio</label>
+          <input type="number" id="promo-price" min="0" step="0.01" placeholder="0.00">
+        </div>
+        <div class="field">
+          <label>Estado</label>
+          <select id="promo-active">
+            <option value="1">Activa</option>
+            <option value="0">Inactiva</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Categoría aplicable</label>
+          <select id="promo-category">
+            <option value="">Todas las categorías</option>
+            <option value="Alitas">Alitas</option>
+            <option value="Boneless">Boneless</option>
+            <option value="hotdogs">Hot-Dogs</option>
+            <option value="hamburguesas">Hamburguesas</option>
+            <option value="papas">Papas</option>
+            <option value="acompanantes">Acompañantes</option>
+            <option value="bebidas">Bebidas</option>
+            <option value="extras">Extras</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-promo">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-promo">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="catalog-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

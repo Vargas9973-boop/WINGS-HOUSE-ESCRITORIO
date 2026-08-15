@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Costos</title>
+  <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="costs.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Costos</h1>
+          <span>Análisis de rentabilidad y gastos</span>
+        </div>
+      </div>
+      <div class="date-filters">
+        <input type="date" id="filter-from">
+        <span>a</span>
+        <input type="date" id="filter-to">
+        <button id="btn-filter" class="btn btn-outline btn-sm">Filtrar</button>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div id="kpi-grid" class="kpi-grid"></div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title">Ventas por día</div>
+          <div id="day-chart" class="bar-chart"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Productos más vendidos</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Producto</th><th>Unidades</th><th>Total</th></tr></thead>
+              <tbody id="top-products-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-toolbar" style="margin-top:26px;">
+        <h2>Gastos y costos registrados</h2>
+        <button id="btn-new-cost" class="btn btn-brand">+ Registrar costo</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>Fecha</th><th>Concepto</th><th>Categoría</th><th>Monto</th><th></th></tr>
+          </thead>
+          <tbody id="costs-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="cost-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Registrar costo</h2>
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Concepto</label>
+          <input type="text" id="cost-concept" placeholder="Ej. Renta, luz, gas, insumos...">
+        </div>
+        <div class="field">
+          <label>Categoría</label>
+          <select id="cost-category">
+            <option value="fijo">Costo fijo</option>
+            <option value="variable">Costo variable</option>
+            <option value="insumo">Insumos</option>
+            <option value="servicio">Servicios</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Monto</label>
+          <input type="number" id="cost-amount" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Fecha</label>
+          <input type="date" id="cost-date">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-cost">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-cost">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="costs-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

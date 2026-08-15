@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Módulo de Ventas</title>
+  <link rel="stylesheet" href="sales.css">
+</head>
+<body>
+
+  <!-- MODAL: SELECCIÓN DE TIPO DE CLIENTE -->
+  <div id="client-type-modal" class="modal-overlay show">
+    <div class="modal-content">
+      <img src="logo.png" alt="Wings House" class="modal-logo">
+      <h2>Tipo de Venta</h2>
+      <p>Selecciona el tipo de cliente para aplicar las tarifas correspondientes:</p>
+      <div class="modal-buttons">
+        <button id="btn-public" class="btn-primary">Público General</button>
+        <button id="btn-employee" class="btn-secondary">Empleado / Interno</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CHECKOUT / COBRO -->
+  <div id="checkout-modal" class="modal-overlay">
+    <div class="modal-content checkout-box">
+      <h2>Procesar Pago</h2>
+
+      <div class="checkout-total">
+        <span>Total a cobrar</span>
+        <strong id="checkout-total-amount">$0.00</strong>
+      </div>
+
+      <div class="pay-methods">
+        <button class="pay-method-btn active" data-method="efectivo">Efectivo</button>
+        <button class="pay-method-btn" data-method="tarjeta">Tarjeta</button>
+        <button class="pay-method-btn" data-method="transferencia">Transferencia</button>
+      </div>
+
+      <div id="cash-fields" class="cash-fields">
+        <label for="amount-received">Recibido</label>
+        <input type="number" id="amount-received" placeholder="0.00" min="0" step="0.01" autocomplete="off">
+        <div class="change-row">
+          <span>Cambio</span>
+          <strong id="change-amount">$0.00</strong>
+        </div>
+      </div>
+
+      <label class="print-check">
+        <input type="checkbox" id="chk-print" checked>
+        Imprimir ticket en la impresora configurada
+      </label>
+
+      <div class="modal-buttons">
+        <button id="btn-cancel-checkout" class="btn-secondary">Cancelar</button>
+        <button id="btn-confirm-checkout" class="btn-primary">Confirmar Venta</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTENEDOR PRINCIPAL -->
+  <div class="sales-container">
+
+    <header class="sales-header">
+      <div class="header-left">
+        <button id="btn-back" class="btn-icon-back" title="Volver al Menú">&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-mini-logo">
+        <div class="brand-info">
+          <h1>Wings House POS</h1>
+          <span id="badge-client-type" class="badge-status">Público General</span>
+        </div>
+      </div>
+
+      <div class="header-search">
+        <input type="text" id="search-input" placeholder="Buscar producto..." autocomplete="off">
+      </div>
+
+      <div class="header-actions">
+        <span id="folio-preview" class="folio-preview"></span>
+        <button id="btn-change-client" class="btn-outline">Cambiar Cliente</button>
+      </div>
+    </header>
+
+    <main class="sales-layout">
+
+      <section class="catalog-section">
+        <nav id="categories-bar" class="categories-bar">
+          <button class="cat-btn active" data-category="all">Todos</button>
+          <button class="cat-btn promo-cat" data-category="promo">★ Promociones</button>
+          <button class="cat-btn" data-category="Alitas">Alitas</button>
+          <button class="cat-btn" data-category="Boneless">Boneless</button>
+          <button class="cat-btn" data-category="hotdogs">Hot-Dogs</button>
+          <button class="cat-btn" data-category="hamburguesas">Hamburguesas</button>
+          <button class="cat-btn" data-category="papas">Papas</button>
+          <button class="cat-btn" data-category="acompanantes">Acompañantes</button>
+          <button class="cat-btn" data-category="bebidas">Bebidas</button>
+          <button class="cat-btn" data-category="extras">Extras</button>
+        </nav>
+
+        <!-- FRANJA FIJA DE PROMOCIONES: siempre visible, arriba del catálogo,
+             para seleccionarlas con un solo clic sin cambiar de categoría. -->
+        <div id="promo-strip" class="promo-strip"></div>
+
+        <div id="products-grid" class="products-grid"></div>
+      </section>
+
+      <aside class="cart-section">
+        <div class="cart-header">
+          <h2>Orden Actual</h2>
+          <button id="btn-clear-cart" class="btn-link" title="Vaciar Orden">Limpiar</button>
+        </div>
+
+        <div id="cart-items" class="cart-items-list">
+          <div class="cart-empty-state">
+            <p>La orden está vacía</p>
+            <span>Selecciona productos o promociones del catálogo</span>
+          </div>
+        </div>
+
+        <div class="cart-summary">
+          <div class="summary-row">
+            <span>Subtotal</span>
+            <span id="subtotal-amount">$0.00</span>
+          </div>
+          <div class="summary-row discount" id="row-discount" style="display: none;">
+            <span>Descuento Empleado</span>
+            <span id="discount-amount">-$0.00</span>
+          </div>
+          <div class="summary-row total">
+            <span>Total</span>
+            <span id="total-amount">$0.00</span>
+          </div>
+
+          <button id="btn-checkout" class="btn-checkout" disabled>
+            <span>Procesar Pago</span>
+          </button>
+        </div>
+      </aside>
+
+    </main>
+  </div>
+
+  <script src="sales-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

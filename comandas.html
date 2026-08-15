@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Comandas</title>
+  <link rel="stylesheet" href="sales.css">
+  <link rel="stylesheet" href="comandas.css">
+</head>
+<body>
+
+  <!-- VISTA: MAPA DE MESAS -->
+  <div id="tables-screen" class="comandas-screen">
+    <header class="sales-header">
+      <div class="header-left">
+        <button id="btn-back" class="btn-icon-back" title="Volver al Menú">&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-mini-logo">
+        <div class="brand-info">
+          <h1>Comandas — Mesas</h1>
+          <span id="badge-user" class="badge-status">&nbsp;</span>
+        </div>
+      </div>
+      <span id="realtime-status" class="realtime-badge realtime-disconnected">Desconectado</span>
+      <button id="btn-refresh-tables" class="btn-outline">Actualizar</button>
+    </header>
+
+    <main class="tables-grid-wrap">
+      <div id="tables-grid" class="tables-grid"></div>
+    </main>
+  </div>
+
+  <!-- VISTA: COMANDA DE UNA MESA -->
+  <div id="order-screen" class="sales-container" style="display:none;">
+    <header class="sales-header">
+      <div class="header-left">
+        <button id="btn-back-to-tables" class="btn-icon-back" title="Volver a mesas">&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-mini-logo">
+        <div class="brand-info">
+          <h1 id="order-table-title">Mesa</h1>
+          <span class="badge-status">Comanda abierta</span>
+        </div>
+      </div>
+      <div class="header-search">
+        <input type="text" id="search-input" placeholder="Buscar producto..." autocomplete="off">
+      </div>
+      <div class="header-actions">
+        <button id="btn-cancel-table" class="btn-outline">Cancelar mesa</button>
+      </div>
+    </header>
+
+    <main class="sales-layout">
+      <section class="catalog-section">
+        <nav id="categories-bar" class="categories-bar">
+          <button class="cat-btn active" data-category="all">Todos</button>
+          <button class="cat-btn promo-cat" data-category="promo">★ Promociones</button>
+          <button class="cat-btn" data-category="Alitas">Alitas</button>
+          <button class="cat-btn" data-category="Boneless">Boneless</button>
+          <button class="cat-btn" data-category="hotdogs">Hot-Dogs</button>
+          <button class="cat-btn" data-category="hamburguesas">Hamburguesas</button>
+          <button class="cat-btn" data-category="papas">Papas</button>
+          <button class="cat-btn" data-category="acompanantes">Acompañantes</button>
+          <button class="cat-btn" data-category="bebidas">Bebidas</button>
+          <button class="cat-btn" data-category="extras">Extras</button>
+        </nav>
+        <div id="promo-strip" class="promo-strip"></div>
+        <div id="products-grid" class="products-grid"></div>
+      </section>
+
+      <aside class="cart-section">
+        <div class="cart-header">
+          <h2>Consumo de la mesa</h2>
+        </div>
+        <div id="cart-items" class="cart-items-list">
+          <div class="cart-empty-state">
+            <p>Aún no hay consumo</p>
+            <span>Agrega productos del catálogo</span>
+          </div>
+        </div>
+        <div class="cart-summary">
+          <div class="summary-row total">
+            <span>Total acumulado</span>
+            <span id="total-amount">$0.00</span>
+          </div>
+          <button id="btn-request-bill" class="btn-checkout">
+            <span>Pedir la cuenta</span>
+          </button>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- MODAL: COBRAR / CERRAR MESA -->
+  <div id="checkout-modal" class="modal-overlay">
+    <div class="modal-content checkout-box">
+      <h2 id="checkout-title">Cobrar mesa</h2>
+      <div class="checkout-total">
+        <span>Total a cobrar</span>
+        <strong id="checkout-total-amount">$0.00</strong>
+      </div>
+      <div class="pay-methods">
+        <button class="pay-method-btn active" data-method="efectivo">Efectivo</button>
+        <button class="pay-method-btn" data-method="tarjeta">Tarjeta</button>
+        <button class="pay-method-btn" data-method="transferencia">Transferencia</button>
+      </div>
+      <div id="cash-fields" class="cash-fields">
+        <label for="amount-received">Recibido</label>
+        <input type="number" id="amount-received" placeholder="0.00" min="0" step="0.01" autocomplete="off">
+        <div class="change-row">
+          <span>Cambio</span>
+          <strong id="change-amount">$0.00</strong>
+        </div>
+      </div>
+      <label class="print-check">
+        <input type="checkbox" id="chk-print" checked>
+        Imprimir el ticket de esta mesa
+      </label>
+      <div class="modal-buttons">
+        <button id="btn-cancel-checkout" class="btn-secondary">Cancelar</button>
+        <button id="btn-confirm-checkout" class="btn-primary">Confirmar cobro</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="comandas-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>
