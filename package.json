@@ -1,6 +1,6 @@
 {
   "name": "wings-house-admin",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Sistema administrativo Wings House - Ventas, Catálogo, Inventarios, Merma, Costos y Asistencia (Supabase)",
   "main": "main.js",
   "author": "Wings House",
