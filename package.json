@@ -22,6 +22,16 @@
   },
   "build": {
     "appId": "com.wingshouse.escritorio",
+    "productName": "Wings House Admin",
+    "icon": "build/icon.ico",
+    "win": {
+      "icon": "build/icon.ico",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
     "publish": [
       { "provider": "github", "owner": "Vargas9973-boop", "repo": "WINGS-HOUSE-ESCRITORIO" }
     ]
