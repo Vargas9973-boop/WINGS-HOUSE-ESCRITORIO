@@ -1,6 +1,10 @@
 const { app, BrowserWindow, ipcMain, dialog, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
+const log = require('electron-log');
+autoUpdater.logger = log;
+log.transports.file.level = 'info';
 
 let mainWindow;
 let currentSession = null; // { id, username, displayName, role }
@@ -141,6 +145,18 @@ app.whenReady().then(async () => {
   });
   registerIpcHandlers();
   createWindow();
+
+  autoUpdater.checkForUpdatesAndNotify();
+
+  autoUpdater.on('update-available', () => log.info('Update available'));
+  autoUpdater.on('update-downloaded', () => {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Actualización lista',
+      message: 'Nueva versión descargada. ¿Reiniciar ahora para instalar?',
+      buttons: ['Reiniciar ahora', 'Después']
+    }).then((r) => { if (r.response === 0) autoUpdater.quitAndInstall(); });
+  });
 });
 
 app.on('window-all-closed', () => {

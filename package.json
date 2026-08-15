@@ -7,13 +7,23 @@
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "electron": "^31.3.1"
+    "electron": "^31.3.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.wingshouse.escritorio",
+    "publish": [
+      { "provider": "github", "owner": "Vargas9973-boop", "repo": "WINGS-HOUSE-ESCRITORIO" }
+    ]
   }
 }
