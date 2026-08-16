@@ -7,6 +7,7 @@ let allPromotions = [];
 let catalogLoaded = false;
 let currentTableNumber = null;
 let currentSaleId = null;
+let currentOrderMode = null; // 'mesa' | 'llevar'
 let currentItems = [];
 let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
@@ -39,7 +40,10 @@ async function fetchComandas() {
   if (isRealtimeConnected) return; // Realtime activo: el polling de respaldo no aplica.
 
   try {
-    const tables = await window.comandasAPI.getTables();
+    const [tables, takeoutOrders] = await Promise.all([
+      window.comandasAPI.getTables(),
+      window.comandasAPI.getTakeoutOrders()
+    ]);
 
     tables.forEach((t) => {
       if (t.status !== 'ocupada' || t.saleId == null) return;
@@ -56,6 +60,23 @@ async function fetchComandas() {
           id: t.saleId,
           table_number: t.number,
           total: t.total
+        });
+      }
+    });
+
+    (takeoutOrders || []).forEach((o) => {
+      if (notifiedSaleIds.has(o.id)) {
+        console.log('🔕 Ignorado duplicado:', o.id);
+        return;
+      }
+
+      notifiedSaleIds.add(o.id);
+
+      if (window.orderAlertAPI) {
+        window.orderAlertAPI.reportFallbackSale({
+          id: o.id,
+          table_number: null,
+          total: o.total
         });
       }
     });
@@ -106,6 +127,9 @@ if (window.orderAlertAPI) {
 const tablesScreen = document.getElementById('tables-screen');
 const orderScreen = document.getElementById('order-screen');
 const tablesGrid = document.getElementById('tables-grid');
+const takeoutGrid = document.getElementById('takeout-grid');
+const cartHeaderTitle = document.getElementById('cart-header-title');
+const btnCancelTable = document.getElementById('btn-cancel-table');
 const productsGrid = document.getElementById('products-grid');
 const promoStrip = document.getElementById('promo-strip');
 const cartItemsContainer = document.getElementById('cart-items');
@@ -200,6 +224,130 @@ async function loadTables() {
 }
 
 // ==========================================================================
+// PEDIDOS PARA LLEVAR
+// ==========================================================================
+// A diferencia de una mesa (una comanda abierta a la vez, reutilizada por
+// número), un pedido para llevar es una comanda nueva cada vez: puede haber
+// varios en curso simultáneamente, así que se listan por id.
+
+function deliveryStatusLabel(status) {
+  return {
+    pendiente: 'Pendiente',
+    en_camino: 'En camino',
+    entregado: 'Entregado'
+  }[status] || 'Pendiente';
+}
+
+// Solo avanza el estado (pendiente -> en_camino -> entregado); el resto de
+// los datos de domicilio (cliente, dirección, repartidor) se capturan una
+// sola vez desde la web al crear el pedido y aquí solo se muestran.
+function deliveryCardHtml(o) {
+  const status = o.delivery_status || 'pendiente';
+
+  return `
+    <div class="table-card takeout-card delivery-card" data-sale-id="${o.id}">
+      <h3>🛵 #${o.id}</h3>
+      <span class="status-label">${deliveryStatusLabel(status)}</span>
+      <div class="delivery-info">
+        <div class="delivery-address">${escapeHtml(o.delivery_address || 'Sin dirección')}</div>
+        ${o.customer_name ? `<div class="delivery-customer">${escapeHtml(o.customer_name)}</div>` : ''}
+        <div class="delivery-driver">
+          ${o.driver_name ? `Repartidor: ${escapeHtml(o.driver_name)}` : 'Sin repartidor asignado'}
+        </div>
+      </div>
+      <div class="table-total">${fmt(o.total)}</div>
+      <div class="delivery-actions">
+        ${status !== 'en_camino' && status !== 'entregado'
+          ? `<button type="button" class="btn-delivery-status" data-action="en_camino" data-sale-id="${o.id}">🛵 En camino</button>`
+          : ''}
+        ${status !== 'entregado'
+          ? `<button type="button" class="btn-delivery-status" data-action="entregado" data-sale-id="${o.id}">✅ Entregado</button>`
+          : ''}
+      </div>
+    </div>
+  `;
+}
+
+async function handleSetDeliveryStatus(saleId, status) {
+  try {
+    await window.comandasAPI.setDeliveryStatus(saleId, status);
+    await loadTakeoutOrders();
+  } catch (err) {
+    console.error('Error al actualizar el estado de entrega:', err);
+    toast(
+      err && err.message ? err.message : 'No se pudo actualizar el estado de entrega.',
+      'error'
+    );
+  }
+}
+
+async function loadTakeoutOrders() {
+  try {
+    const orders = await window.comandasAPI.getTakeoutOrders();
+
+    if (!takeoutGrid) return;
+
+    if (!orders || orders.length === 0) {
+      takeoutGrid.innerHTML = `
+        <div class="empty-takeout">Sin pedidos para llevar en curso.</div>
+      `;
+      return;
+    }
+
+    takeoutGrid.innerHTML = orders
+      .map((o) =>
+        o.is_delivery
+          ? deliveryCardHtml(o)
+          : `
+          <div class="table-card takeout-card" data-sale-id="${o.id}">
+            <h3>🛍️ #${o.id}</h3>
+            <span class="status-label">En curso</span>
+            <div class="table-total">${fmt(o.total)}</div>
+          </div>
+        `
+      )
+      .join('');
+
+    takeoutGrid.querySelectorAll('.btn-delivery-status').forEach((btn) => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        handleSetDeliveryStatus(Number(btn.dataset.saleId), btn.dataset.action);
+      });
+    });
+
+    takeoutGrid.querySelectorAll('.takeout-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        openTakeoutScreen(Number(card.dataset.saleId));
+      });
+    });
+  } catch (err) {
+    console.error('Error al cargar los pedidos para llevar:', err);
+  }
+}
+
+// Refresca ambas listas del mapa (mesas + para llevar) a la vez; es lo que
+// se usa en todo punto donde antes solo se refrescaban las mesas.
+async function refreshTablesScreen() {
+  await Promise.all([loadTables(), loadTakeoutOrders()]);
+}
+
+document.getElementById('btn-new-takeout').addEventListener('click', async () => {
+  try {
+    const opened = await window.comandasAPI.openTakeout();
+    await openTakeoutScreen(opened.id);
+  } catch (err) {
+    console.error('Error al abrir el pedido para llevar:', err);
+
+    toast(
+      err && err.message
+        ? err.message
+        : 'No se pudo abrir el pedido para llevar.',
+      'error'
+    );
+  }
+});
+
+// ==========================================================================
 // ACTUALIZACIÓN AUTOMÁTICA DEL MAPA
 // ==========================================================================
 
@@ -215,7 +363,7 @@ function startTablesAutoRefresh() {
       tablesScreen.style.display !== 'none' &&
       orderScreen.style.display === 'none'
     ) {
-      await loadTables();
+      await refreshTablesScreen();
     }
   }, AUTO_REFRESH_MS);
 }
@@ -229,7 +377,7 @@ function stopTablesAutoRefresh() {
 
 // Botón ACTUALIZAR manual
 document.getElementById('btn-refresh-tables').addEventListener('click', async () => {
-  await loadTables();
+  await refreshTablesScreen();
 });
 
 // Regresar al menú principal
@@ -437,7 +585,19 @@ searchInput.addEventListener('input', () => {
 // ==========================================================================
 // Persistida en base de datos en tiempo real.
 
+function setOrderScreenLabels(mode, identifier) {
+  document.getElementById('order-table-title').textContent =
+    mode === 'llevar' ? `🛍️ PARA LLEVAR #${identifier}` : `Mesa ${identifier}`;
+
+  cartHeaderTitle.textContent =
+    mode === 'llevar' ? 'Consumo del pedido' : 'Consumo de la mesa';
+
+  btnCancelTable.textContent =
+    mode === 'llevar' ? 'Cancelar pedido' : 'Cancelar mesa';
+}
+
 async function openTableScreen(tableNumber) {
+  currentOrderMode = 'mesa';
   currentTableNumber = tableNumber;
 
   await ensureCatalog();
@@ -450,9 +610,7 @@ async function openTableScreen(tableNumber) {
 
     currentSaleId = opened.id;
 
-    document.getElementById(
-      'order-table-title'
-    ).textContent = `Mesa ${tableNumber}`;
+    setOrderScreenLabels('mesa', tableNumber);
 
     tablesScreen.style.display = 'none';
     orderScreen.style.display = 'flex';
@@ -479,6 +637,43 @@ async function openTableScreen(tableNumber) {
 }
 
 // ==========================================================================
+// COMANDA DE UN PEDIDO PARA LLEVAR
+// ==========================================================================
+
+async function openTakeoutScreen(saleId) {
+  currentOrderMode = 'llevar';
+  currentTableNumber = null;
+  currentSaleId = saleId;
+
+  await ensureCatalog();
+
+  renderPromoStrip();
+  renderProducts();
+
+  setOrderScreenLabels('llevar', saleId);
+
+  tablesScreen.style.display = 'none';
+  orderScreen.style.display = 'flex';
+
+  stopTablesAutoRefresh();
+
+  try {
+    await refreshOrder();
+  } catch (err) {
+    console.error('Error al abrir el pedido para llevar:', err);
+
+    toast(
+      err && err.message
+        ? err.message
+        : 'No se pudo abrir el pedido para llevar.',
+      'error'
+    );
+  }
+
+  startOrderAutoRefresh();
+}
+
+// ==========================================================================
 // REGRESAR AL MAPA DE MESAS
 // ==========================================================================
 
@@ -490,11 +685,12 @@ document
     orderScreen.style.display = 'none';
     tablesScreen.style.display = 'flex';
 
+    currentOrderMode = null;
     currentSaleId = null;
     currentTableNumber = null;
     currentItems = [];
 
-    await loadTables();
+    await refreshTablesScreen();
 
     startTablesAutoRefresh();
   });
@@ -504,14 +700,16 @@ document
 // ==========================================================================
 
 async function refreshOrder() {
-  if (currentTableNumber == null) return;
+  if (currentOrderMode === 'mesa' && currentTableNumber == null) return;
+  if (currentOrderMode === 'llevar' && currentSaleId == null) return;
+  if (currentOrderMode == null) return;
 
   try {
-    const sale = await window.comandasAPI.getOpenSale(
-      currentTableNumber
-    );
+    const sale = currentOrderMode === 'mesa'
+      ? await window.comandasAPI.getOpenSale(currentTableNumber)
+      : await window.comandasAPI.getOpenSaleById(currentSaleId);
 
-    // La mesa pudo haber sido cobrada o cancelada desde otra
+    // La mesa/pedido pudo haber sido cobrado o cancelado desde otra
     // estación.
     if (!sale) {
       currentItems = [];
@@ -520,26 +718,31 @@ async function refreshOrder() {
         totalEl.textContent = fmt(0);
       }
 
-      // Si seguimos dentro de una mesa pero la venta ya no existe,
+      // Si seguimos dentro de la comanda pero la venta ya no existe,
       // regresamos automáticamente al mapa.
       if (
         orderScreen &&
         orderScreen.style.display !== 'none'
       ) {
+        const wasTakeout = currentOrderMode === 'llevar';
+
         stopOrderAutoRefresh();
 
         orderScreen.style.display = 'none';
         tablesScreen.style.display = 'flex';
 
+        currentOrderMode = null;
         currentSaleId = null;
         currentTableNumber = null;
         currentItems = [];
 
-        await loadTables();
+        await refreshTablesScreen();
         startTablesAutoRefresh();
 
         toast(
-          'La mesa fue cerrada o cancelada desde otra estación.',
+          wasTakeout
+            ? 'El pedido fue cobrado o cancelado desde otra estación.'
+            : 'La mesa fue cerrada o cancelada desde otra estación.',
           'default'
         );
       }
@@ -573,7 +776,7 @@ function startOrderAutoRefresh() {
     if (
       orderScreen &&
       orderScreen.style.display !== 'none' &&
-      currentTableNumber != null
+      currentSaleId != null
     ) {
       await refreshOrder();
     }
@@ -834,9 +1037,13 @@ async function changeQty(itemId, delta) {
 document
   .getElementById('btn-cancel-table')
   .addEventListener('click', async () => {
+    const isTakeout = currentOrderMode === 'llevar';
+
     if (
       !confirm(
-        '¿Cancelar esta mesa? Se perderá todo el consumo registrado.'
+        isTakeout
+          ? '¿Cancelar este pedido? Se perderá todo el consumo registrado.'
+          : '¿Cancelar esta mesa? Se perderá todo el consumo registrado.'
       )
     ) {
       return;
@@ -852,11 +1059,12 @@ document
       orderScreen.style.display = 'none';
       tablesScreen.style.display = 'flex';
 
+      currentOrderMode = null;
       currentSaleId = null;
       currentTableNumber = null;
       currentItems = [];
 
-      await loadTables();
+      await refreshTablesScreen();
 
       startTablesAutoRefresh();
 
@@ -866,7 +1074,9 @@ document
       toast(
         err && err.message
           ? err.message
-          : 'No se pudo cancelar la mesa.',
+          : isTakeout
+            ? 'No se pudo cancelar el pedido.'
+            : 'No se pudo cancelar la mesa.',
         'error'
       );
     }
@@ -880,9 +1090,13 @@ document
   .getElementById('btn-request-bill')
   .addEventListener('click', () => {
 
+    const isTakeout = currentOrderMode === 'llevar';
+
     if (currentItems.length === 0) {
       toast(
-        'La mesa no tiene consumo registrado.',
+        isTakeout
+          ? 'El pedido no tiene consumo registrado.'
+          : 'La mesa no tiene consumo registrado.',
         'error'
       );
       return;
@@ -897,8 +1111,9 @@ document
 
     document.getElementById(
       'checkout-title'
-    ).textContent =
-      `Cobrar Mesa ${currentTableNumber}`;
+    ).textContent = isTakeout
+      ? `Cobrar Pedido #${currentSaleId}`
+      : `Cobrar Mesa ${currentTableNumber}`;
 
     checkoutTotalAmount.textContent =
       fmt(total);
@@ -1076,7 +1291,9 @@ document
           );
 
         toast(
-          `Mesa ${currentTableNumber} cobrada: ${result.folio}`,
+          currentOrderMode === 'llevar'
+            ? `Pedido para llevar cobrado: ${result.folio}`
+            : `Mesa ${currentTableNumber} cobrada: ${result.folio}`,
           'success'
         );
 
@@ -1132,11 +1349,12 @@ document
         tablesScreen.style.display =
           'flex';
 
+        currentOrderMode = null;
         currentSaleId = null;
         currentTableNumber = null;
         currentItems = [];
 
-        await loadTables();
+        await refreshTablesScreen();
 
         startTablesAutoRefresh();
 
@@ -1190,13 +1408,13 @@ document.addEventListener(
         'none'
     ) {
 
-      await loadTables();
+      await refreshTablesScreen();
 
     } else if (
       orderScreen &&
       orderScreen.style.display !==
         'none' &&
-      currentTableNumber != null
+      currentSaleId != null
     ) {
 
       await refreshOrder();
@@ -1247,9 +1465,9 @@ document.addEventListener(
       document.getElementById(
         'badge-user'
       ).textContent =
-        `${session.displayName} · Mapa de mesas`;
+        `${session.displayName} · Mapa de comandas`;
 
-      await loadTables();
+      await refreshTablesScreen();
 
       // Iniciar actualización automática
       // del mapa de mesas.
@@ -1269,12 +1487,19 @@ document.addEventListener(
       }
 
       // Si venimos de "Ver pedido" en la alerta de cocina, abrimos esa
-      // mesa directamente en vez de dejar al usuario en el mapa.
+      // mesa (o ese pedido para llevar) directamente en vez de dejar al
+      // usuario en el mapa.
       const pendingTable = localStorage.getItem('wh_open_table_on_load');
+      const pendingTakeoutId = localStorage.getItem('wh_open_takeout_on_load');
+
       if (pendingTable) {
         localStorage.removeItem('wh_open_table_on_load');
         const n = Number(pendingTable);
         if (n > 0) await openTableScreen(n);
+      } else if (pendingTakeoutId) {
+        localStorage.removeItem('wh_open_takeout_on_load');
+        const id = Number(pendingTakeoutId);
+        if (id > 0) await openTakeoutScreen(id);
       }
 
     } catch (err) {

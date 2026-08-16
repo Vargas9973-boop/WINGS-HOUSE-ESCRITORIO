@@ -29,10 +29,32 @@
   padding: 26px;
 }
 
+.comandas-section + .comandas-section {
+  margin-top: 34px;
+}
+
+.comandas-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.comandas-section-header h2 {
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
 .tables-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 18px;
+}
+
+.empty-takeout {
+  color: var(--text-secondary, #9a8f85);
+  font-size: 0.9rem;
+  padding: 4px 2px;
 }
 
 .table-card {
@@ -81,4 +103,58 @@
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.table-card.takeout-card {
+  border-color: var(--brand-orange);
+  background: linear-gradient(135deg, #2c1a08 0%, #1e1712 100%);
+}
+
+.table-card.takeout-card .status-label {
+  color: var(--brand-orange);
+}
+
+.table-card.delivery-card {
+  border-color: var(--brand-orange);
+  background: linear-gradient(135deg, #4a2a08 0%, #2c1a08 100%);
+}
+
+.delivery-info {
+  font-size: 0.82rem;
+  color: var(--text-secondary, #d8cfc5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.delivery-info .delivery-address {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.delivery-info .delivery-driver {
+  font-style: italic;
+}
+
+.delivery-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn-delivery-status {
+  flex: 1;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  padding: 8px 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--brand-orange);
+  color: #1e1712;
+  transition: var(--transition-fast);
+}
+
+.btn-delivery-status:hover {
+  filter: brightness(1.1);
 }

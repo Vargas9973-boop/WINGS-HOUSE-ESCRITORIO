@@ -654,6 +654,51 @@ async function getOpenSaleByTable(tableNumber) {
   return { ...sale, items };
 }
 
+// Pedidos "para llevar": misma comanda que una mesa (sale_items, cobro,
+// cancelación), pero con table_number NULL y sin límite de una sola comanda
+// abierta a la vez (a diferencia de una mesa, se puede abrir un pedido para
+// llevar nuevo aunque ya haya otros en curso).
+// select('*') ya trae is_delivery, customer_name, customer_phone,
+// delivery_address, driver_name, delivery_fee y delivery_status (columnas
+// agregadas por comanda_set_delivery, ver wing-house-web/supabase/migrations
+// /0004_delivery_orders.sql): la web las llena al crear un pedido a
+// domicilio, y esta pantalla las lee para pintar la tarjeta 🛵.
+async function getOpenTakeoutOrders() {
+  const { data, error } = await supabase.from('sales').select('*')
+    .eq('status', 'abierta').eq('branch_id', getCurrentBranchId()).is('table_number', null)
+    .order('created_at', { ascending: false });
+  must(error, 'No se pudieron obtener los pedidos para llevar');
+  return data;
+}
+
+async function openTakeoutOrder(openedBy) {
+  const { data, error } = await supabase.rpc('comanda_open_takeout', { p_opened_by: openedBy || null });
+  must(error, 'No se pudo abrir el pedido para llevar');
+  return { id: data };
+}
+
+// Cambia solo el estado de entrega (pendiente -> en_camino -> entregado).
+// No toca driver_name ni el resto de los datos de domicilio: esos se
+// capturan una sola vez desde la web (comanda_set_delivery); el escritorio
+// solo los muestra y avanza el estado.
+async function comandaSetDeliveryStatus(saleId, status) {
+  if (status !== 'en_camino' && status !== 'entregado') {
+    throw new Error(`Estado de entrega inválido: ${status}`);
+  }
+  const { error } = await supabase.from('sales').update({ delivery_status: status }).eq('id', saleId);
+  must(error, 'No se pudo actualizar el estado de entrega');
+  return true;
+}
+
+async function getOpenSaleById(saleId) {
+  const { data: sale, error } = await supabase.from('sales').select('*').eq('id', saleId).maybeSingle();
+  must(error, 'No se pudo obtener el pedido');
+  if (!sale || sale.status !== 'abierta') return null;
+  const { data: items, error: itErr } = await supabase.from('sale_items').select('*').eq('sale_id', sale.id).order('id');
+  must(itErr);
+  return { ...sale, items };
+}
+
 async function comandaAddItem(saleId, item) {
   const { error } = await supabase.rpc('comanda_add_item', {
     p_sale_id: saleId,
@@ -1157,6 +1202,10 @@ module.exports = {
   getTables,
   openTable,
   getOpenSaleByTable,
+  getOpenTakeoutOrders,
+  openTakeoutOrder,
+  comandaSetDeliveryStatus,
+  getOpenSaleById,
   comandaAddItem,
   comandaUpdateItemQty,
   comandaRemoveItem,

@@ -321,6 +321,14 @@ function registerIpcHandlers() {
     return opened;
   });
   safeHandle('comandas:getOpenSale', (tableNumber) => db.getOpenSaleByTable(tableNumber));
+  safeHandle('comandas:getTakeoutOrders', () => db.getOpenTakeoutOrders());
+  safeHandle('comandas:setDeliveryStatus', (saleId, status) => db.comandaSetDeliveryStatus(saleId, status));
+  safeHandle('comandas:openTakeout', async () => {
+    const opened = await db.openTakeoutOrder(currentSession ? currentSession.username : null);
+    markSaleSelfCreated(opened.id);
+    return opened;
+  });
+  safeHandle('comandas:getOpenSaleById', (saleId) => db.getOpenSaleById(saleId));
   safeHandle('comandas:addItem', (saleId, item) => db.comandaAddItem(saleId, item));
   safeHandle('comandas:updateItemQty', (itemId, quantity) => db.comandaUpdateItemQty(itemId, quantity));
   safeHandle('comandas:removeItem', (itemId) => db.comandaRemoveItem(itemId));

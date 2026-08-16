@@ -17,7 +17,7 @@
         <button id="btn-back" class="btn-icon-back" title="Volver al Menú">&#8592;</button>
         <img src="logo.png" alt="Wings House" class="header-mini-logo">
         <div class="brand-info">
-          <h1>Comandas — Mesas</h1>
+          <h1>Comandas</h1>
           <span id="badge-user" class="badge-status">&nbsp;</span>
         </div>
       </div>
@@ -26,11 +26,26 @@
     </header>
 
     <main class="tables-grid-wrap">
-      <div id="tables-grid" class="tables-grid"></div>
+      <section class="comandas-section">
+        <div class="comandas-section-header">
+          <h2>Mesas</h2>
+        </div>
+        <div id="tables-grid" class="tables-grid"></div>
+      </section>
+
+      <section class="comandas-section">
+        <div class="comandas-section-header">
+          <h2>🛍️ Para llevar</h2>
+          <button id="btn-new-takeout" class="btn-primary">+ Nuevo pedido</button>
+        </div>
+        <div id="takeout-grid" class="tables-grid takeout-grid">
+          <div class="empty-takeout">Sin pedidos para llevar en curso.</div>
+        </div>
+      </section>
     </main>
   </div>
 
-  <!-- VISTA: COMANDA DE UNA MESA -->
+  <!-- VISTA: COMANDA DE UNA MESA O PEDIDO PARA LLEVAR -->
   <div id="order-screen" class="sales-container" style="display:none;">
     <header class="sales-header">
       <div class="header-left">
@@ -69,7 +84,7 @@
 
       <aside class="cart-section">
         <div class="cart-header">
-          <h2>Consumo de la mesa</h2>
+          <h2 id="cart-header-title">Consumo de la mesa</h2>
         </div>
         <div id="cart-items" class="cart-items-list">
           <div class="cart-empty-state">

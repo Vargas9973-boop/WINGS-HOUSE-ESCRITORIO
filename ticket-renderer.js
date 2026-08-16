@@ -17,6 +17,14 @@ function clientLabel(type) {
         : 'Público General';
 }
 
+function deliveryStatusLabel(status) {
+    return {
+        pendiente: 'Pendiente',
+        en_camino: 'En camino',
+        entregado: 'Entregado'
+    }[status] || 'Pendiente';
+}
+
 function shortId(id) {
     if (id === null || id === undefined) return '';
     return String(id);
@@ -111,6 +119,50 @@ function renderTicket({ sale, settings }) {
             <span>-${fmt(sale.discount)}</span>
         </div>
     `;
+
+    // --- Domicilio (solo si la venta viene de comanda_set_delivery) ---
+    const deliveryHtml = sale.is_delivery
+        ? `
+            <div class="sep"></div>
+            <div class="row">
+                <span>Domicilio</span>
+                <span class="bold">${escapeHtml(deliveryStatusLabel(sale.delivery_status))}</span>
+            </div>
+            ${sale.customer_name ? `
+                <div class="row">
+                    <span>Nombre</span>
+                    <span>${escapeHtml(sale.customer_name)}</span>
+                </div>
+            ` : ''}
+            ${sale.customer_phone ? `
+                <div class="row">
+                    <span>Teléfono</span>
+                    <span>${escapeHtml(sale.customer_phone)}</span>
+                </div>
+            ` : ''}
+            ${sale.delivery_address ? `
+                <div class="row">
+                    <span>Dirección</span>
+                    <span>${escapeHtml(sale.delivery_address)}</span>
+                </div>
+            ` : ''}
+            ${sale.driver_name ? `
+                <div class="row">
+                    <span>Repartidor</span>
+                    <span>${escapeHtml(sale.driver_name)}</span>
+                </div>
+            ` : ''}
+        `
+        : '';
+
+    const deliveryFeeHtml = sale.is_delivery && Number(sale.delivery_fee) > 0
+        ? `
+            <div class="row">
+                <span>Envío</span>
+                <span>${fmt(sale.delivery_fee)}</span>
+            </div>
+        `
+        : '';
 
     const cashHtml = sale.payment_method === 'efectivo'
         ? `
@@ -226,6 +278,8 @@ function renderTicket({ sale, settings }) {
 
         ${tableHtml}
 
+        ${deliveryHtml}
+
         ${attendedHtml}
 
         <div class="row">
@@ -251,6 +305,8 @@ function renderTicket({ sale, settings }) {
                     ${fmt(sale.subtotal)}
                 </span>
             </div>
+
+            ${deliveryFeeHtml}
 
             ${discountHtml}
 

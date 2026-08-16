@@ -158,8 +158,11 @@
 
   function describeAlert(alert) {
     if (alert.tableNumber) return `Mesa ${alert.tableNumber}`;
-    if (alert.folio) return `Folio ${alert.folio}`;
-    return `Comanda #${alert.id}`;
+    // Sin mesa y sin folio todavía: es un pedido para llevar recién abierto
+    // (el folio se asigna hasta que se cobra). Con folio ya es una venta de
+    // mostrador/llevar completada desde otra estación (wing-house-web).
+    if (!alert.folio) return `🛍️ Para llevar #${alert.id}`;
+    return `Folio ${alert.folio}`;
   }
 
   function showBanner(alert) {
@@ -183,6 +186,9 @@
       if (window.api && window.api.sendAction) {
         if (alert.tableNumber) {
           try { localStorage.setItem('wh_open_table_on_load', String(alert.tableNumber)); } catch (e) { /* ignore */ }
+        } else if (!alert.folio) {
+          // Pedido para llevar todavía abierto: se puede saltar directo a él.
+          try { localStorage.setItem('wh_open_takeout_on_load', String(alert.id)); } catch (e) { /* ignore */ }
         }
         window.api.sendAction('open-comandas');
       }
