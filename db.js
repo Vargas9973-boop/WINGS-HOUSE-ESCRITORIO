@@ -655,17 +655,23 @@ async function getOpenSaleByTable(tableNumber) {
 }
 
 // Pedidos "para llevar": misma comanda que una mesa (sale_items, cobro,
-// cancelación), pero con table_number NULL y sin límite de una sola comanda
-// abierta a la vez (a diferencia de una mesa, se puede abrir un pedido para
-// llevar nuevo aunque ya haya otros en curso).
+// cancelación), sin límite de una sola comanda abierta a la vez (a
+// diferencia de una mesa, se puede abrir un pedido para llevar nuevo aunque
+// ya haya otros en curso). Se filtra por client_type (no por table_number)
+// porque tanto el escritorio (comanda_open_takeout, client_type 'Para
+// llevar') como la web (process_sale, client_type 'Llevar') abren estos
+// pedidos, y ambas fuentes ya dejan table_number en NULL.
 // select('*') ya trae is_delivery, customer_name, customer_phone,
 // delivery_address, driver_name, delivery_fee y delivery_status (columnas
 // agregadas por comanda_set_delivery, ver wing-house-web/supabase/migrations
 // /0004_delivery_orders.sql): la web las llena al crear un pedido a
-// domicilio, y esta pantalla las lee para pintar la tarjeta 🛵.
+// domicilio, y esta pantalla las lee para pintar la tarjeta 🛵. No se filtra
+// por is_delivery: los pedidos "para llevar" normales (sin domicilio) deben
+// listarse igual.
 async function getOpenTakeoutOrders() {
   const { data, error } = await supabase.from('sales').select('*')
-    .eq('status', 'abierta').eq('branch_id', getCurrentBranchId()).is('table_number', null)
+    .eq('status', 'abierta').eq('branch_id', getCurrentBranchId())
+    .in('client_type', ['Para llevar', 'Llevar', 'PARA LLEVAR'])
     .order('created_at', { ascending: false });
   must(error, 'No se pudieron obtener los pedidos para llevar');
   return data;
@@ -681,11 +687,17 @@ async function openTakeoutOrder(openedBy) {
 // No toca driver_name ni el resto de los datos de domicilio: esos se
 // capturan una sola vez desde la web (comanda_set_delivery); el escritorio
 // solo los muestra y avanza el estado.
+// Al llegar a 'entregado' también cierra la venta (status = 'completada'):
+// process_sale la insertó como 'abierta' para que fuera visible aquí
+// mientras iba en camino (ver 20260816010000_process_sale_delivery_open.sql),
+// y hasta este punto debe empezar a contar en reportes / corte de caja.
 async function comandaSetDeliveryStatus(saleId, status) {
   if (status !== 'en_camino' && status !== 'entregado') {
     throw new Error(`Estado de entrega inválido: ${status}`);
   }
-  const { error } = await supabase.from('sales').update({ delivery_status: status }).eq('id', saleId);
+  const update = { delivery_status: status };
+  if (status === 'entregado') update.status = 'completada';
+  const { error } = await supabase.from('sales').update(update).eq('id', saleId);
   must(error, 'No se pudo actualizar el estado de entrega');
   return true;
 }
