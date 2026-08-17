@@ -381,10 +381,15 @@ function registerIpcHandlers() {
   safeHandle('corte:getByFecha', (fecha) => db.getCorteByFecha(fecha));
 
   safeHandle('corte:printTicket', async (html) => {
+    const settings = await db.getAllSettings();
+    if (!isPrinterEnabled(settings)) {
+      console.log('🖨️ Impresión deshabilitada en Ajustes. Se omite (corte).');
+      return { success: false, reason: 'disabled' };
+    }
     const win = new BrowserWindow({ show: false, width: 302, height: 800, webPreferences: { offscreen: true } });
     await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
     await new Promise(r => setTimeout(r, 800));
-    win.webContents.print({ silent: false, printBackground: true }, () => {
+    win.webContents.print({ silent: false, printBackground: true, pageSize: getThermalPageSize(settings.ticket_width) }, () => {
       setTimeout(() => { if (!win.isDestroyed()) win.close(); }, 1000);
     });
     return true;
@@ -541,6 +546,11 @@ safeHandle('print:ticket', async (saleId) => {
 
   console.log('🖨️ Configuración:', settings);
 
+  if (!isPrinterEnabled(settings)) {
+    console.log('🖨️ Impresión deshabilitada en Ajustes. Se omite.');
+    return { success: false, reason: 'disabled' };
+  }
+
   const result = await printTicketWindow(sale, settings);
 
   console.log('🖨️ Resultado impresión:', result);
@@ -550,6 +560,14 @@ safeHandle('print:ticket', async (saleId) => {
   }
 
   return result;
+});
+
+// Imprime un ticket de prueba (Ajustes -> Impresión -> "Imprimir prueba").
+// A propósito ignora printer_enabled: sirve justo para probar el hardware
+// aunque la impresión automática esté deshabilitada.
+safeHandle('printer:test', async () => {
+  const settings = await db.getAllSettings();
+  return printTestTicket(settings);
 });
 }
 // Abre una ventana visible con el reporte completo y despliega el diálogo de
@@ -665,6 +683,95 @@ function printHistoryReport(payload) {
   });
 }
 
+// Ancho físico del rollo térmico configurado en Ajustes -> Impresión.
+// settings.ticket_width guarda '58' o '80' (string); cualquier otro valor
+// (incluida su ausencia, instalaciones previas a este ajuste) cae en 58mm,
+// que es el default que ya traía la app.
+function getTicketWidthMm(rawWidth) {
+    return rawWidth === '80' ? 80 : 58;
+}
+
+// pageSize en micrones para webContents.print(). El alto (297mm) es solo un
+// límite generoso: las impresoras térmicas de rollo cortan según el
+// contenido real recibido, no según este alto declarado, así que no genera
+// papel en blanco de más.
+function getThermalPageSize(rawWidth) {
+    const widthMm = getTicketWidthMm(rawWidth);
+    return { width: widthMm * 1000, height: 297000 };
+}
+
+// true salvo que el usuario haya apagado explícitamente el toggle en
+// Ajustes -> Impresión; así una instalación existente sin este ajuste
+// guardado sigue imprimiendo igual que antes.
+function isPrinterEnabled(settings) {
+    return settings?.printer_enabled !== 'false';
+}
+
+// Ticket de prueba para Ajustes -> Impresión -> "Imprimir prueba": imprime
+// dos reglas de 32 y 48 caracteres (referencias estándar de 58mm/80mm) para
+// que se pueda verificar a simple vista que el papel cargado corresponde al
+// ancho configurado, sin depender de tener una venta real a la mano.
+function buildTestRuler(n) {
+    return Array.from({ length: n }, (_, i) => String((i + 1) % 10)).join('');
+}
+
+function printTestTicket(settings) {
+    return new Promise((resolve) => {
+        const widthMm = getTicketWidthMm(settings?.ticket_width);
+        const configuredPrinter = String(settings?.printer_name || '').trim();
+
+        const html = `
+        <html><head><meta charset="utf-8"><style>
+          @page { size: ${widthMm}mm auto; margin: 0; }
+          body { width: ${widthMm}mm; font-family: 'Courier New', monospace; font-size: 12px; margin: 0; padding: 3mm; color: #000; }
+          .c { text-align: center; }
+          .b { font-weight: bold; }
+          .sep { border-top: 1px dashed #000; margin: 6px 0; }
+          .ruler { white-space: pre; }
+        </style></head><body>
+          <div class="c b">PRUEBA DE IMPRESIÓN</div>
+          <div class="c">Papel configurado: ${widthMm}mm</div>
+          <div class="sep"></div>
+          <div>Línea de 32 caracteres (ref. 58mm):</div>
+          <div class="ruler">${buildTestRuler(32)}</div>
+          <div class="sep"></div>
+          <div>Línea de 48 caracteres (ref. 80mm):</div>
+          <div class="ruler">${buildTestRuler(48)}</div>
+          <div class="sep"></div>
+          <div class="c">Si ambas líneas se ven completas<br>y sin cortarse, el ancho está bien.</div>
+        </body></html>`;
+
+        const win = new BrowserWindow({ show: false, width: 320, height: 600 });
+
+        const finish = (result) => {
+            if (!win.isDestroyed()) win.close();
+            resolve(result);
+        };
+
+        win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+            .then(() => new Promise((r) => setTimeout(r, 400)))
+            .then(() => {
+                const printOptions = {
+                    printBackground: true,
+                    margins: { marginType: 'none' },
+                    pageSize: getThermalPageSize(settings?.ticket_width)
+                };
+
+                if (configuredPrinter) {
+                    printOptions.silent = true;
+                    printOptions.deviceName = configuredPrinter;
+                } else {
+                    printOptions.silent = false;
+                }
+
+                win.webContents.print(printOptions, (success, reason) => {
+                    finish({ success, reason: reason || null, printer: configuredPrinter || null });
+                });
+            })
+            .catch((err) => finish({ success: false, reason: err.message }));
+    });
+}
+
 // Abre una ventana oculta, renderiza el ticket y lo envía a la impresora
 // configurada en Ajustes (o al diálogo de impresión si no hay ninguna asignada).
 //
@@ -752,7 +859,8 @@ function printTicketWindow(saleData, settings) {
                 printBackground: true,
                 margins: {
                     marginType: 'none'
-                }
+                },
+                pageSize: getThermalPageSize(settings?.ticket_width)
             };
 
             if (configuredPrinter) {

@@ -1006,6 +1006,8 @@ btnConfirmCheckout.addEventListener('click', async () => {
       toast('Ticket enviado a la impresora.', 'success');
     } else if (result && result.reason === 'cancelled') {
       console.log('Impresión cancelada por el usuario.');
+    } else if (result && result.reason === 'disabled') {
+      console.log('Impresión deshabilitada en Ajustes.');
     } else {
       console.warn('Impresión no completada:', result);
     }

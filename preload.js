@@ -144,5 +144,6 @@ contextBridge.exposeInMainWorld('historyAPI', {
 
 contextBridge.exposeInMainWorld('printerAPI', {
   list: () => call('printers:list'),
-  printTicket: (saleId) => call('print:ticket', saleId)
+  printTicket: (saleId) => call('print:ticket', saleId),
+  test: () => call('printer:test')
 });

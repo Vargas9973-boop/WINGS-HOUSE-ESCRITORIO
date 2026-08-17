@@ -61,6 +61,21 @@ function escapeHtml(str) {
     }[c]));
 }
 
+function applyPageWidth(widthMm) {
+    let styleEl = document.getElementById('dynamic-page-size');
+
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'dynamic-page-size';
+        document.head.appendChild(styleEl);
+    }
+
+    styleEl.textContent = `
+        @page { size: ${widthMm}mm auto; margin: 0; }
+        body { width: ${widthMm}mm; }
+    `;
+}
+
 function renderTicket({ sale, settings }) {
 
     const root = document.getElementById('ticket-root');
@@ -75,6 +90,12 @@ function renderTicket({ sale, settings }) {
     const width = settings.ticket_width === '80' ? '80' : '58';
 
     root.className = `ticket ticket-${width}`;
+
+    // @page/body en mm reales: sin esto, al imprimir se usa el tamaño de
+    // papel por defecto del sistema (normalmente carta) en vez del ancho
+    // del rollo térmico configurado, y el contenido sale cortado o con
+    // márgenes en blanco enormes.
+    applyPageWidth(width === '80' ? 80 : 58);
 
     const items = Array.isArray(sale.items)
         ? sale.items

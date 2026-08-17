@@ -11,7 +11,14 @@ function escapeHtml(str) {
 async function imprimirTicketCorte(fecha) {
   try {
     const fechaInput = fecha || document.getElementById('corte-fecha')?.value || localISODate();
-    const resumen = await window.corteAPI.getResumen(fechaInput);
+    const [resumen, settings] = await Promise.all([
+      window.corteAPI.getResumen(fechaInput),
+      window.db.settings.getAll().catch(() => ({}))
+    ]);
+    // Fallback a 58mm (el default histórico de esta app) si el ajuste no existe.
+    const widthMm = settings?.ticket_width === '80' ? 80 : 58;
+    const fontSize = widthMm === 80 ? 12 : 10;
+    const bigFontSize = widthMm === 80 ? 15 : 13;
 
     const fondoInicial = Number(resumen.fondoInicial ?? resumen.fondo_inicial) || 0;
     const ventasPorPago = resumen.ventasPorPago || resumen.ventas_por_pago || {};
@@ -39,12 +46,12 @@ async function imprimirTicketCorte(fecha) {
 
     const html = `
     <html><head><meta charset="utf-8"><style>
-      @page{margin:0}
-      body{width:48mm;font-family:'Courier New',monospace;font-size:10px;margin:0;padding:4mm;color:#000}
+      @page{size:${widthMm}mm auto;margin:0}
+      body{width:${widthMm}mm;font-family:'Courier New',monospace;font-size:${fontSize}px;margin:0;padding:4mm;color:#000}
       .c{text-align:center}.r{text-align:right}
       .sep{border-top:1px dashed #000;margin:6px 0}
       .row{display:flex;justify-content:space-between}
-      .b{font-weight:bold} .lg{font-size:13px}
+      .b{font-weight:bold} .lg{font-size:${bigFontSize}px}
     </style></head><body>
       <div class="c b lg">WINGS HOUSE</div>
       <div class="c">CORTE DE CAJA</div>
@@ -73,7 +80,10 @@ async function imprimirTicketCorte(fecha) {
       <div class="c">Gracias</div>
     </body></html>`;
 
-    await window.corteAPI.printTicket(html);
+    const result = await window.corteAPI.printTicket(html);
+    if (result && result.reason === 'disabled') {
+      alert('La impresión está deshabilitada en Ajustes -> Impresión.');
+    }
   } catch(e) {
     console.error(e);
     alert('Error: '+e.message);

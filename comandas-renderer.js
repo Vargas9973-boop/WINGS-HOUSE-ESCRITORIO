@@ -1310,14 +1310,16 @@ document
                 result.id
               );
 
-            toast(
-              printResult.success
-                ? 'Ticket de la mesa enviado a imprimir.'
-                : 'No se pudo imprimir el ticket.',
-              printResult.success
-                ? 'success'
-                : 'error'
-            );
+            if (printResult.reason !== 'disabled') {
+              toast(
+                printResult.success
+                  ? 'Ticket de la mesa enviado a imprimir.'
+                  : 'No se pudo imprimir el ticket.',
+                printResult.success
+                  ? 'success'
+                  : 'error'
+              );
+            }
 
           } catch (err) {
 

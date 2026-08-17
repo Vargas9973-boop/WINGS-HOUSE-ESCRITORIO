@@ -8,6 +8,9 @@ async function loadSettings() {
   document.getElementById('set-employee-discount').value = settings.employee_discount_pct || '15';
   document.getElementById('set-table-count').value = settings.table_count || '10';
   document.getElementById('set-ticket-width').value = settings.ticket_width || '58';
+  // Fallback a habilitado: una instalación existente sin este ajuste guardado
+  // debe seguir imprimiendo igual que antes de que existiera el toggle.
+  document.getElementById('set-printer-enabled').checked = settings.printer_enabled !== 'false';
 
   let paydayNumber = 6;
   if (settings.payroll_payday) {
@@ -67,6 +70,33 @@ async function loadPrinters(selected) {
 
 document.getElementById('btn-refresh-printers').addEventListener('click', () => loadPrinters(document.getElementById('set-printer-name').value));
 
+// Imprime de inmediato con la impresora/ancho seleccionados en pantalla
+// (aunque todavía no se hayan guardado), guardándolos primero, para que la
+// prueba siempre refleje lo que el usuario está a punto de guardar.
+document.getElementById('btn-print-test').addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget;
+  btn.disabled = true;
+  try {
+    await window.db.settings.set('printer_name', document.getElementById('set-printer-name').value);
+    await window.db.settings.set('ticket_width', document.getElementById('set-ticket-width').value);
+
+    const result = await window.printerAPI.test();
+
+    if (result && result.success) {
+      toast('Ticket de prueba enviado a imprimir.', 'success');
+    } else if (result && result.reason === 'cancelled') {
+      // Usuario cerró el diálogo de impresión sin imprimir: no es un error.
+    } else {
+      toast('No se pudo imprimir el ticket de prueba.', 'error');
+    }
+  } catch (err) {
+    console.error(err);
+    toast('No se pudo imprimir el ticket de prueba.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById('btn-save-settings').addEventListener('click', async () => {
   const paydayNumber = Number(document.getElementById('set-payroll-payday').value);
 
@@ -78,6 +108,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     table_count: document.getElementById('set-table-count').value || '10',
     printer_name: document.getElementById('set-printer-name').value,
     ticket_width: document.getElementById('set-ticket-width').value,
+    printer_enabled: document.getElementById('set-printer-enabled').checked ? 'true' : 'false',
     payroll_payday: JSON.stringify({ day: PAYROLL_DAY_NAMES[paydayNumber], day_number: paydayNumber })
   };
 
