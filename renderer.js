@@ -9,6 +9,7 @@ const ALL_MENU_ITEMS = [
   { id: 'reportes', title: 'REPORTES', icon: '📑', desc: 'Exportación Diaria, Semanal y Mensual', action: 'open-reports', roles: ['admin'] },
   { id: 'asistencia', title: 'ASISTENCIA', icon: '⏱️', desc: 'Horarios y Empleados', action: 'open-attendance', roles: ['admin', 'empleado'] },
   { id: 'nomina', title: 'NÓMINA', icon: '💵', desc: 'Pago Semanal, Créditos y Faltas', action: 'open-payroll', roles: ['admin'] },
+  { id: 'historial', title: 'HISTORIAL', icon: '🗂️', desc: 'Ventas, Consumo Interno, Beneficio y Merma', action: 'open-history', roles: ['admin'] },
   { id: 'cuentas', title: 'CUENTAS', icon: '🔐', desc: 'Usuarios y Roles del Sistema', action: 'open-accounts', roles: ['admin'] },
   { id: 'ajustes', title: 'AJUSTES', icon: '⚙️', desc: 'Impresora, Negocio y Descuentos', action: 'open-settings', roles: ['admin'] }
 ];

@@ -112,6 +112,7 @@ const PAGES = {
   'open-reports': 'reports.html',
   'open-attendance': 'attendance.html',
   'open-payroll': 'payroll.html',
+  'open-history': 'history.html',
   'open-accounts': 'accounts.html',
   'open-settings': 'settings.html'
 };
@@ -210,6 +211,15 @@ function safeHandle(channel, fn) {
 function money(n) {
   return (Number(n) || 0).toFixed(2);
 }
+
+const HISTORY_TIPO_LABELS = {
+  venta: 'Venta',
+  para_llevar: 'Para Llevar',
+  domicilio: 'Domicilio',
+  beneficio_empleado: 'Beneficio Empleado',
+  consumo_interno: 'Consumo Jefes',
+  merma: 'Merma'
+};
 
 function registerIpcHandlers() {
   function requireAdmin() {
@@ -480,6 +490,36 @@ function registerIpcHandlers() {
   });
 
   // ------------------------------------------------------------------
+  // HISTORIAL UNIFICADO
+  // ------------------------------------------------------------------
+  safeHandle('history:get', (filters = {}) => db.getUnifiedHistory(filters));
+
+  safeHandle('history:exportCsv', async (filters = {}) => {
+    const { rows } = await db.getUnifiedHistory(filters);
+    const headers = ['Fecha', 'Tipo', 'Detalle', 'Total', 'Método', 'Autorizó / Cliente', 'Folio'];
+    const dataRows = rows.map((r) => [
+      r.fecha, HISTORY_TIPO_LABELS[r.tipo] || r.tipo, r.detalle, money(r.total), r.metodoLabel, r.autorizoCliente, r.folio || ''
+    ]);
+    const defaultName = `historial_${filters.startDate || 'inicio'}_a_${filters.endDate || 'hoy'}.csv`;
+
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Exportar historial a CSV',
+      defaultPath: defaultName,
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    });
+    if (result.canceled || !result.filePath) return { cancelled: true };
+
+    fs.writeFileSync(result.filePath, toCsv(headers, dataRows), 'utf8');
+    return { cancelled: false, path: result.filePath };
+  });
+
+  safeHandle('history:exportPdf', async (filters = {}) => {
+    const { rows, kpis } = await db.getUnifiedHistory(filters);
+    const settings = await db.getAllSettings();
+    return printHistoryReport({ rows, kpis, filters, settings });
+  });
+
+  // ------------------------------------------------------------------
   // IMPRESIÓN DE TICKETS (equipo externo: impresora térmica/POS)
   // ------------------------------------------------------------------
 safeHandle('printers:list', async () => {
@@ -565,6 +605,59 @@ function printFullReport(payload) {
     reportWin.webContents.once('did-finish-load', () => {
       if (!reportWin.isDestroyed()) {
         reportWin.webContents.send('report-data', payload);
+      }
+    });
+
+    timeoutId = setTimeout(() => finish({ success: false, reason: 'timeout' }), 10000);
+  });
+}
+
+// Igual que printFullReport pero para el Historial Unificado: ventana e IPC
+// propios ('history-report-*') para no pisarse con una impresión de reporte
+// normal que esté en curso al mismo tiempo.
+function printHistoryReport(payload) {
+  return new Promise((resolve) => {
+    const reportWin = new BrowserWindow({
+      width: 1000,
+      height: 1000,
+      webPreferences: {
+        preload: path.join(__dirname, 'history-print-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+
+    let settled = false;
+    let timeoutId;
+
+    const cleanup = () => {
+      ipcMain.removeListener('history-report-rendered', onRendered);
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const onRendered = (event) => {
+      if (reportWin.isDestroyed() || event.sender !== reportWin.webContents) return;
+      reportWin.webContents.print({ printBackground: true }, (success, reason) => {
+        finish({ success, reason: reason || null });
+      });
+    };
+
+    ipcMain.on('history-report-rendered', onRendered);
+
+    reportWin.on('closed', () => finish({ success: false, reason: 'window-closed' }));
+
+    reportWin.loadFile('history-print.html');
+
+    reportWin.webContents.once('did-finish-load', () => {
+      if (!reportWin.isDestroyed()) {
+        reportWin.webContents.send('history-report-data', payload);
       }
     });
 

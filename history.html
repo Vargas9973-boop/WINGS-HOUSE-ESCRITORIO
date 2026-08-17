@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Historial</title>
+  <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="costs.css">
+  <link rel="stylesheet" href="reports.css">
+  <link rel="stylesheet" href="corte.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Historial Unificado</h1>
+          <span>Ventas, para llevar, domicilio, consumo interno, beneficio de empleado y merma</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div class="tabs-bar">
+        <button class="range-btn active" data-range="today">Hoy</button>
+        <button class="range-btn" data-range="yesterday">Ayer</button>
+        <button class="range-btn" data-range="week">Esta semana</button>
+        <button class="range-btn" data-range="month">Este mes</button>
+        <button class="range-btn" data-range="custom">Personalizado</button>
+      </div>
+
+      <div class="date-filters" style="margin: 14px 0; flex-wrap: wrap;">
+        <div class="field">
+          <label>Desde</label>
+          <input type="date" id="hist-from">
+        </div>
+        <div class="field">
+          <label>Hasta</label>
+          <input type="date" id="hist-to">
+        </div>
+        <div class="field">
+          <label>Tipo</label>
+          <select id="hist-tipo">
+            <option value="todos">Todos</option>
+            <option value="venta">Ventas</option>
+            <option value="consumo_interno">Consumo Interno</option>
+            <option value="beneficio_empleado">Beneficio Empleado</option>
+            <option value="para_llevar">Para Llevar</option>
+            <option value="domicilio">Domicilio</option>
+            <option value="merma">Merma</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Empleado</label>
+          <select id="hist-empleado">
+            <option value="">Todos</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Método de pago</label>
+          <select id="hist-metodo">
+            <option value="">Todos</option>
+            <option value="efectivo">Efectivo</option>
+            <option value="tarjeta">Tarjeta</option>
+            <option value="transferencia">Transferencia</option>
+            <option value="credito_nomina">Crédito Nómina</option>
+            <option value="beneficio_empleado">Beneficio (no cobrado)</option>
+          </select>
+        </div>
+        <div class="field" style="align-self:end;">
+          <button id="btn-buscar-historial" class="btn btn-brand btn-sm">Buscar</button>
+        </div>
+      </div>
+
+      <div id="hist-kpi-grid" class="kpi-grid"></div>
+
+      <div class="section-toolbar" style="margin-top:18px;">
+        <h2>Movimientos</h2>
+        <div style="display:flex; gap:10px;">
+          <button id="btn-export-csv" class="btn btn-outline btn-sm">Exportar a Excel (CSV)</button>
+          <button id="btn-export-pdf" class="btn btn-outline btn-sm">Exportar a PDF</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Tipo</th>
+              <th>Detalle</th>
+              <th>Total</th>
+              <th>Método</th>
+              <th>Autorizó / Cliente</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="hist-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="hist-ticket-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2 id="hist-ticket-title">Ticket</h2>
+      <div id="hist-ticket-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-close-hist-ticket">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="history-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

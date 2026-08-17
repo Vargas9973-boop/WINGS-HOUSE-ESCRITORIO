@@ -136,6 +136,12 @@ contextBridge.exposeInMainWorld('reportsAPI', {
   cortes: (dateFrom, dateTo) => call('reports:cortes', { dateFrom, dateTo })
 });
 
+contextBridge.exposeInMainWorld('historyAPI', {
+  get: (filters) => call('history:get', filters),
+  exportCsv: (filters) => call('history:exportCsv', filters),
+  exportPdf: (filters) => call('history:exportPdf', filters)
+});
+
 contextBridge.exposeInMainWorld('printerAPI', {
   list: () => call('printers:list'),
   printTicket: (saleId) => call('print:ticket', saleId)

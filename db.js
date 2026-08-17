@@ -1726,6 +1726,176 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
 }
 
 // ==========================================================================
+// 11C. HISTORIAL UNIFICADO
+// ==========================================================================
+// tipo de cada fila del historial:
+//   'venta'              -> mostrador/mesa (client_type != 'Llevar')
+//   'para_llevar'        -> client_type = 'Llevar', is_delivery = false
+//   'domicilio'          -> client_type = 'Llevar', is_delivery = true
+//   'beneficio_empleado' -> fila derivada (no una tabla propia) por cada
+//                           venta de empleado con benefit_used > 0; el monto
+//                           es solo la parte comida, no el total de la venta
+//   'consumo_interno'    -> waste.tipo = 'consumo_interno' ("Consumo Jefes")
+//   'merma'              -> waste.tipo = 'merma'
+const HISTORY_PAYMENT_LABELS = {
+  efectivo: 'Efectivo',
+  tarjeta: 'Tarjeta',
+  transferencia: 'Transferencia',
+  credito_nomina: 'Crédito Nómina',
+  beneficio_empleado: 'Beneficio (no cobrado)'
+};
+
+// El escritorio abre pedidos para llevar con client_type 'Para llevar'
+// (comanda_open_takeout) y la web con 'Llevar' (process_sale); ambos deben
+// clasificarse igual aquí (ver mismo patrón en getOpenTakeoutOrders).
+const TAKEOUT_CLIENT_TYPES = ['para llevar', 'llevar'];
+function saleHistoryTipo(sale) {
+  if (TAKEOUT_CLIENT_TYPES.includes(String(sale.client_type || '').toLowerCase())) {
+    return sale.is_delivery ? 'domicilio' : 'para_llevar';
+  }
+  return 'venta';
+}
+
+async function getUnifiedHistory(filters = {}) {
+  const startDate = filters.startDate || '2000-01-01';
+  const endDate = filters.endDate || '2999-12-31';
+  const fromTs = `${startDate}T00:00:00`;
+  const toTs = `${endDate}T23:59:59.999`;
+
+  const { data: sales, error: salesErr } = await supabase
+    .from('sales')
+    .select('*')
+    .eq('status', 'completada')
+    .eq('branch_id', getCurrentBranchId())
+    .gte('created_at', fromTs)
+    .lte('created_at', toTs)
+    .order('created_at', { ascending: false });
+  must(salesErr, 'No se pudo obtener el historial de ventas');
+
+  const saleIds = (sales || []).map((s) => s.id);
+  let itemsBySale = {};
+  if (saleIds.length > 0) {
+    const { data: items, error: itemsErr } = await supabase
+      .from('sale_items')
+      .select('sale_id, name, quantity, unit_price, subtotal')
+      .in('sale_id', saleIds);
+    must(itemsErr, 'No se pudo obtener el detalle de artículos del historial');
+    (items || []).forEach((it) => {
+      if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
+      itemsBySale[it.sale_id].push(it);
+    });
+  }
+
+  const { data: waste, error: wasteErr } = await supabase
+    .from('waste')
+    .select('*')
+    .in('tipo', ['consumo_interno', 'merma'])
+    .gte('created_at', fromTs)
+    .lte('created_at', toTs)
+    .order('created_at', { ascending: false });
+  must(wasteErr, 'No se pudo obtener merma/consumo interno del historial');
+
+  const rows = [];
+
+  (sales || []).forEach((s) => {
+    const items = itemsBySale[s.id] || [];
+    const detalle = items.length
+      ? items.map((it) => `${it.quantity}x ${it.name}`).join(', ')
+      : s.folio;
+
+    rows.push({
+      id: `venta-${s.id}`,
+      saleId: s.id,
+      fecha: s.created_at,
+      tipo: saleHistoryTipo(s),
+      detalle,
+      total: Number(s.total) || 0,
+      metodo: s.payment_method,
+      metodoLabel: HISTORY_PAYMENT_LABELS[s.payment_method] || s.payment_method,
+      autorizoCliente: s.is_delivery ? (s.customer_name || 'Sin nombre') : (s.employee_name || s.client_type),
+      empleadoNombre: s.employee_name || null,
+      folio: s.folio,
+      items,
+      repartidor: s.is_delivery ? s.driver_name : null,
+      direccion: s.is_delivery ? s.delivery_address : null,
+      telefono: s.is_delivery ? s.customer_phone : null
+    });
+
+    const benefitUsed = s.client_type === 'employee'
+      ? Math.max((Number(s.employee_benefit_before) || 0) - (Number(s.employee_benefit_after) || 0), 0)
+      : 0;
+    if (benefitUsed > 0) {
+      rows.push({
+        id: `beneficio-${s.id}`,
+        saleId: s.id,
+        fecha: s.created_at,
+        tipo: 'beneficio_empleado',
+        detalle,
+        total: benefitUsed,
+        metodo: 'beneficio_empleado',
+        metodoLabel: HISTORY_PAYMENT_LABELS.beneficio_empleado,
+        autorizoCliente: s.employee_name,
+        empleadoNombre: s.employee_name || null,
+        folio: s.folio,
+        items,
+        repartidor: null,
+        direccion: null,
+        telefono: null
+      });
+    }
+  });
+
+  (waste || []).forEach((w) => {
+    rows.push({
+      id: `waste-${w.id}`,
+      saleId: null,
+      fecha: w.created_at,
+      tipo: w.tipo,
+      detalle: w.tipo === 'consumo_interno' ? w.reason : w.item_name,
+      total: Number(w.cost) || 0,
+      metodo: null,
+      metodoLabel: '—',
+      autorizoCliente: w.autorizado_por || '—',
+      empleadoNombre: w.autorizado_por || null,
+      folio: null,
+      items: [],
+      repartidor: null,
+      direccion: null,
+      telefono: null
+    });
+  });
+
+  rows.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+  // KPIs sobre el mismo rango (y empleado/método si están activos), sin
+  // aplicar el filtro de tipo -- son justamente el desglose POR tipo.
+  const kpiScope = rows.filter((r) => {
+    if (filters.employeeName && r.empleadoNombre !== filters.employeeName) return false;
+    if (filters.paymentMethod && r.metodo !== filters.paymentMethod) return false;
+    return true;
+  });
+  const sumTipo = (tipo) => kpiScope.filter((r) => r.tipo === tipo).reduce((sum, r) => sum + r.total, 0);
+  const kpis = {
+    ventasTotales: sumTipo('venta') + sumTipo('para_llevar') + sumTipo('domicilio'),
+    consumoInterno: sumTipo('consumo_interno'),
+    beneficioEmpleados: sumTipo('beneficio_empleado'),
+    paraLlevar: sumTipo('para_llevar'),
+    domicilio: sumTipo('domicilio'),
+    mermaTotal: sumTipo('merma')
+  };
+
+  // Filtros finales sobre las filas a mostrar.
+  const filtered = rows.filter((r) => {
+    if (filters.tipo && filters.tipo !== 'todos' && r.tipo !== filters.tipo) return false;
+    if (filters.employeeName && r.empleadoNombre !== filters.employeeName) return false;
+    if (filters.paymentMethod && r.metodo !== filters.paymentMethod) return false;
+    return true;
+  });
+
+  return { rows: filtered, kpis };
+}
+
+// ==========================================================================
 // 12. AJUSTES
 // ==========================================================================
 async function getAllSettings() {
@@ -1828,6 +1998,7 @@ module.exports = {
   getPayrollData,
   getPayrollDetail,
   closePayrollWeek,
+  getUnifiedHistory,
   // ajustes
   getAllSettings,
   setSetting
