@@ -68,7 +68,13 @@ contextBridge.exposeInMainWorld('db', {
   payroll: {
     getWeek: (weekStart) => call('payroll:getWeek', weekStart),
     setBonus: (payload) => call('payroll:setBonus', payload),
-    history: (filters) => call('payroll:history', filters)
+    history: (filters) => call('payroll:history', filters),
+    pendientes: (weekStart) => call('payroll:pendientes', weekStart),
+    getSettings: () => call('payroll:getSettings'),
+    getWeekRange: (paydayNumber, referenceDate) => call('payroll:getWeekRange', paydayNumber, referenceDate),
+    getData: (weekStart, weekEnd) => call('payroll:getData', weekStart, weekEnd),
+    getDetail: (employeeName, weekStart, weekEnd) => call('payroll:getDetail', employeeName, weekStart, weekEnd),
+    close: (weekStart, weekEnd) => call('payroll:close', weekStart, weekEnd)
   },
   users: {
     getAll: () => call('users:getAll'),
@@ -114,10 +120,20 @@ contextBridge.exposeInMainWorld('orderAlertAPI', {
   onStatus: (cb) => ipcRenderer.on('order-alert:status', (event, connected) => cb(connected)),
   onNewSale: (cb) => ipcRenderer.on('order-alert:new-sale', (event, saleId) => cb(saleId))
 });
+contextBridge.exposeInMainWorld('corteAPI', {
+  getResumen: (fecha) => call('corte:getResumen', fecha),
+  printTicket: (html) => call('corte:printTicket', html),
+  setFondoInicial: (fecha, fondoInicial) => call('corte:setFondoInicial', fecha, fondoInicial),
+  addMovimiento: (data) => call('corte:addMovimiento', data),
+  removeMovimiento: (id) => call('corte:removeMovimiento', id),
+  cerrar: (fecha, efectivoReal) => call('corte:cerrar', fecha, efectivoReal),
+  getByFecha: (fecha) => call('corte:getByFecha', fecha)
+});
 
 contextBridge.exposeInMainWorld('reportsAPI', {
   exportCsv: (type, dateFrom, dateTo) => call('export:csv', type, dateFrom, dateTo),
-  printReport: (dateFrom, dateTo) => call('export:printReport', dateFrom, dateTo)
+  printReport: (dateFrom, dateTo) => call('export:printReport', dateFrom, dateTo),
+  cortes: (dateFrom, dateTo) => call('reports:cortes', { dateFrom, dateTo })
 });
 
 contextBridge.exposeInMainWorld('printerAPI', {

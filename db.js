@@ -34,6 +34,37 @@ function getCurrentBranchId() {
 }
 
 // ==========================================================================
+// NÓMINA — semana laboral configurable (settings.payroll_payday)
+// ==========================================================================
+function localDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+// Dada la config de día de pago (0=domingo..6=sábado) y una fecha de
+// referencia, retorna la semana laboral [start,end] que contiene esa fecha.
+// La semana EMPIEZA el día siguiente al de pago (p.ej. payday=sábado ->
+// semana = domingo a sábado) y "end" es justo el día de pago. Importante:
+// el día siguiente a un payday ya pertenece a la semana NUEVA (la que aún
+// no se paga), no a la que acaba de cerrar -- si esto se calculara como
+// "el payday más reciente <= referencia" el domingo posterior al pago
+// quedaría mal agrupado con la semana ya cerrada.
+function getWeekRange(paydayNumber, referenceDate) {
+  const payday = Number.isInteger(paydayNumber) ? ((paydayNumber % 7) + 7) % 7 : 6;
+  const weekStartDay = (payday + 1) % 7;
+  const ref = referenceDate ? new Date(`${referenceDate}T00:00:00`) : new Date();
+  ref.setHours(0, 0, 0, 0);
+  const diff = (ref.getDay() - weekStartDay + 7) % 7;
+  const start = new Date(ref);
+  start.setDate(start.getDate() - diff);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  return { start: localDateStr(start), end: localDateStr(end) };
+}
+
+// ==========================================================================
 // ARRANQUE — siembra las cuentas por defecto si la tabla 'users' está vacía.
 // El resto del catálogo/inventario/ajustes ya se siembra desde el script SQL
 // (supabase_schema.sql) porque no necesita hashing en Node.
@@ -412,6 +443,32 @@ async function createSale(payload, openedBy, cashierId) {
     if (updErr) console.error('No se pudo asociar el cajero a la venta:', updErr.message);
   }
 
+  // Si el excedente del beneficio de empleado se fue a crédito de nómina,
+  // process_sale ya lo sumó a employee_weekly_credit (usado por la pestaña
+  // "Nómina semanal" de Asistencia); aquí además se registra en
+  // payroll_deductions -- la fuente que usa el módulo de Nómina nuevo
+  // (día de pago configurable, faltas, cierre semanal). Son dos libros que
+  // reflejan el mismo hecho; no se revierte la venta si esto falla, ya se
+  // cobró/comprometió el crédito y debe quedar registrada de todas formas.
+  if (Number(data.credit_amount) > 0) {
+    try {
+      const payrollSettings = await getPayrollSettings();
+      const { start, end } = getWeekRange(payrollSettings.dayNumber);
+      const { error: dedErr } = await supabase.from('payroll_deductions').insert([{
+        employee_name: data.employee_name,
+        amount: Number(data.credit_amount),
+        sale_id: data.id,
+        reason: 'Excedente crédito nómina - venta empleado',
+        status: 'pendiente',
+        week_start: start,
+        week_end: end
+      }]);
+      if (dedErr) console.error('No se pudo registrar la deducción de nómina:', dedErr.message);
+    } catch (err) {
+      console.error('No se pudo registrar la deducción de nómina:', err.message);
+    }
+  }
+
   return {
     id: data.id,
     folio: data.folio,
@@ -502,12 +559,16 @@ async function getSaleById(id) {
     credit_available_after: creditAvailableAfter
   };
 }
-
 async function getAllSales(filters = {}) {
   let query = supabase.from('sales').select('*').eq('branch_id', getCurrentBranchId());
   if (filters.status) query = query.eq('status', filters.status);
-  if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T00:00:00`);
-  if (filters.dateTo) query = query.lte('created_at', `${filters.dateTo}T23:59:59.999`);
+  if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T06:00:00.000Z`);
+  if (filters.dateTo) {
+    const d = new Date(filters.dateTo);
+    d.setDate(d.getDate() + 1);
+    const next = d.toISOString().split('T')[0];
+    query = query.lt('created_at', `${next}T06:00:00.000Z`);
+  }
   query = query.order('id', { ascending: false });
   if (filters.limit) query = query.limit(Number(filters.limit));
   const { data, error } = await query;
@@ -824,6 +885,7 @@ async function getAllWaste(filters = {}) {
   let query = supabase.from('waste').select('*');
   if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T00:00:00`);
   if (filters.dateTo) query = query.lte('created_at', `${filters.dateTo}T23:59:59.999`);
+  if (filters.tipo) query = query.eq('tipo', filters.tipo);
   query = query.order('id', { ascending: false });
   const { data, error } = await query;
   must(error, 'No se pudo obtener la merma');
@@ -834,6 +896,15 @@ async function createWaste(data) {
   let cost = Number(data.cost) || 0;
   let itemName = data.item_name;
   let unit = data.unit || 'pza';
+  const tipo = data.tipo === 'consumo_interno' ? 'consumo_interno' : 'merma';
+  const autorizadoPor = tipo === 'consumo_interno' ? String(data.autorizado_por || '').trim() : null;
+  if (tipo === 'consumo_interno' && !autorizadoPor) {
+    throw new Error('Indica qué jefe autoriza el consumo interno.');
+  }
+  const reason =
+    tipo === 'consumo_interno'
+      ? `CONSUMO JEFE - ${autorizadoPor} - ${data.reason || 'Sin especificar'}`
+      : data.reason || 'Sin especificar';
 
   if (data.inventory_id) {
     const { data: invItem, error } = await supabase.from('inventory').select('*').eq('id', data.inventory_id).maybeSingle();
@@ -854,8 +925,10 @@ async function createWaste(data) {
     item_name: itemName,
     quantity: Number(data.quantity) || 0,
     unit,
-    reason: data.reason || 'Sin especificar',
-    cost
+    reason,
+    cost,
+    tipo,
+    autorizado_por: autorizadoPor
   }]).select().single();
   must(insErr, 'No se pudo registrar la merma');
   return row;
@@ -891,6 +964,259 @@ async function removeCost(id) {
   const { error } = await supabase.from('costs').delete().eq('id', id);
   must(error, 'No se pudo eliminar el gasto');
   return { deleted: true };
+}
+
+// ==========================================================================
+// 8B. CORTE DE CAJA
+// ==========================================================================
+// Traduce la categoría de la salida (vocabulario del corte: repartidores/
+// basura/insumos/otros) a la categoría que ya entiende el módulo de Costos
+// (fijo/variable/insumo/servicio), para que el gasto espejado en "costs"
+// siga contando correctamente en Reportes/Rentabilidad sin duplicar UI.
+function mapCashCategoryToCostCategory(categoriaCosto) {
+  const MAP = {
+    repartidores: 'variable',
+    basura: 'variable',
+    insumos: 'insumo',
+    otros: 'variable'
+  };
+  return MAP[categoriaCosto] || 'variable';
+}
+async function getCorteResumen(fecha) {
+  // fecha = '2026-08-16' en hora de Xalapa
+  // Xalapa 00:00 = UTC 06:00
+  const inicioUTC = `${fecha}T06:00:00.000Z`;
+  const d = new Date(fecha);
+  d.setDate(d.getDate() + 1);
+  const fechaSig = d.toISOString().split('T')[0];
+  const finUTC = `${fechaSig}T05:59:59.999Z`;
+
+  const { data: sales, error: salesErr } = await supabase
+   .from('sales')
+   .select('total, delivery_fee, payment_method, status, created_at, client_type, employee_benefit_before, employee_benefit_after')
+   .eq('status', 'completada')
+   .eq('branch_id', getCurrentBranchId())
+   .gte('created_at', inicioUTC)
+   .lte('created_at', finUTC);
+  must(salesErr, 'No se pudieron obtener las ventas del corte');
+
+  let ventaComida = 0;
+  let ventaEnvios = 0;
+  let pedidosConEnvio = 0;
+  let beneficioEmpleados = 0;
+  let creditoNominaHoy = 0;
+  const ventasPorPago = { efectivo: 0, tarjeta: 0, transferencia: 0 };
+
+  // El beneficio de empleado ($100/día) y el excedente a crédito de nómina
+  // nunca entraron a caja: se restan del total de la venta antes de sumarlo
+  // a ventasPorPago, para que "esperado en cajón" no se infle con dinero que
+  // nunca se cobró. ventaComida/ventaEnvios sí conservan el bruto (valor de
+  // lo servido) para que Reportes siga reflejando el volumen real de venta.
+  (sales || []).forEach((s) => {
+    const total = Number(s.total) || 0;
+    const fee = Number(s.delivery_fee) || 0;
+    ventaComida += total - fee;
+    if (fee > 0) {
+      ventaEnvios += fee;
+      pedidosConEnvio += 1;
+    }
+
+    const benefitUsed = s.client_type === 'employee'
+      ? Math.max((Number(s.employee_benefit_before) || 0) - (Number(s.employee_benefit_after) || 0), 0)
+      : 0;
+    beneficioEmpleados += benefitUsed;
+
+    const cashCountable = Math.max(total - benefitUsed, 0);
+    const pm = s.payment_method || 'efectivo';
+
+    if (pm === 'credito_nomina') {
+      creditoNominaHoy += cashCountable;
+    } else {
+      ventasPorPago[pm] = (ventasPorPago[pm] || 0) + cashCountable;
+    }
+  });
+
+  const { data: movimientos, error: movErr } = await supabase
+   .from('cash_movements')
+   .select('*')
+   .eq('fecha', fecha)
+   .eq('branch_id', getCurrentBranchId())
+   .order('created_at', { ascending: false });
+  must(movErr, 'No se pudieron obtener las salidas de caja');
+
+  const salidasPorPago = { efectivo: 0, tarjeta: 0, transferencia: 0 };
+  (movimientos || []).forEach((m) => {
+    const mp = m.metodo_pago || 'efectivo';
+    salidasPorPago[mp] = (salidasPorPago[mp] || 0) + (Number(m.monto) || 0);
+  });
+
+  const { data: cut, error: cutErr } = await supabase
+   .from('cash_cuts')
+   .select('*')
+   .eq('fecha', fecha)
+   .eq('branch_id', getCurrentBranchId())
+   .maybeSingle();
+  must(cutErr, 'No se pudo obtener el fondo inicial del corte');
+
+  return {
+    fecha,
+    fondoInicial: cut? Number(cut.fondo_inicial || 0) : 0,
+    efectivoReal: cut && cut.efectivo_real!= null? Number(cut.efectivo_real) : null,
+    cerrado:!!(cut && cut.cerrado_at),
+    cerradoPor: cut? cut.cerrado_por : null,
+    cerradoAt: cut? cut.cerrado_at : null,
+    ventaComida,
+    ventaEnvios,
+    pedidosConEnvio,
+    ventaTotal: ventaComida + ventaEnvios,
+    ventasPorPago,
+    salidasPorPago,
+    beneficioEmpleados,
+    creditoNominaHoy,
+    movimientos: movimientos || []
+  };
+}
+// Crea/actualiza el fondo inicial del día (upsert por fecha+sucursal: el
+// admin puede corregirlo antes de cerrar sin generar renglones duplicados).
+async function setCashCutFondoInicial(fecha, fondoInicial) {
+  const { data, error } = await supabase
+    .from('cash_cuts')
+    .upsert(
+      { fecha, branch_id: getCurrentBranchId(), fondo_inicial: Number(fondoInicial) || 0 },
+      { onConflict: 'fecha,branch_id' }
+    )
+    .select()
+    .single();
+  must(error, 'No se pudo guardar el fondo inicial');
+  return data;
+}
+
+// Registra una salida de caja manual (repartidores, basura, insumos, etc.).
+// Nunca se genera automáticamente al marcar "En camino" (comanda_set_delivery
+// solo cambia delivery_status): el cajero/admin la captura a mano desde este
+// módulo. Se espeja en "costs" para que Reportes/Rentabilidad la contemple
+// sin tener que sumar cash_movements en dos lugares distintos.
+async function createCashMovement(data) {
+  const fecha = data.fecha || new Date().toISOString().slice(0, 10);
+  const concepto = String(data.concepto || '').trim();
+  if (!concepto) throw new Error('El concepto de la salida es obligatorio.');
+  const monto = Number(data.monto) || 0;
+  const metodoPago = data.metodo_pago || 'efectivo';
+  const categoriaCosto = data.categoria_costo || 'otros';
+
+  const { data: row, error } = await supabase
+    .from('cash_movements')
+    .insert([{
+      fecha,
+      concepto,
+      monto,
+      metodo_pago: metodoPago,
+      categoria_costo: categoriaCosto,
+      branch_id: getCurrentBranchId()
+    }])
+    .select()
+    .single();
+  must(error, 'No se pudo registrar la salida de caja');
+
+  const { error: costErr } = await supabase.from('costs').insert([{
+    concept: concepto,
+    category: mapCashCategoryToCostCategory(categoriaCosto),
+    amount: monto,
+    date: fecha,
+    metodo_pago: metodoPago,
+    branch_id: getCurrentBranchId()
+  }]);
+  // No se revierte cash_movements si esto falla: la salida de caja ya es
+  // real y debe quedar registrada aunque el espejo en Costos falle.
+  if (costErr) console.error('No se pudo espejar la salida en costs:', costErr.message);
+
+  return row;
+}
+
+async function removeCashMovement(id) {
+  const { error } = await supabase.from('cash_movements').delete().eq('id', id);
+  must(error, 'No se pudo eliminar la salida de caja');
+  return { deleted: true };
+}
+
+// Cierra el corte del día: guarda el efectivo contado físicamente y calcula
+// la diferencia contra lo esperado en el cajón (fondo inicial + efectivo
+// neto), tal como se le mostró al usuario en el ticket antes de confirmar.
+async function closeCashCut(fecha, efectivoReal, closedBy) {
+  const resumen = await getCorteResumen(fecha);
+  const efectivoNeto = (resumen.ventasPorPago.efectivo || 0) - (resumen.salidasPorPago.efectivo || 0);
+  const esperado = resumen.fondoInicial + efectivoNeto;
+  const real = Number(efectivoReal) || 0;
+  const cerradoPor = closedBy || 'admin';
+
+  const { data: existing, error: findErr } = await supabase
+    .from('cash_cuts')
+    .select('id')
+    .eq('fecha', fecha)
+    .eq('branch_id', getCurrentBranchId())
+    .maybeSingle();
+  if (findErr) {
+    console.error('[closeCashCut] Error buscando corte existente:', findErr);
+    throw new Error(`No se pudo cerrar el corte de caja: ${findErr.message}`);
+  }
+
+  const payload = {
+    fecha,
+    branch_id: getCurrentBranchId(),
+    fondo_inicial: resumen.fondoInicial,
+    efectivo_real: real,
+    cerrado_por: cerradoPor,
+    cerrado_at: new Date().toISOString()
+  };
+
+  // Si ya existe el corte del día (p.ej. se reintentó tras un fallo), se
+  // actualiza en vez de intentar un insert que chocaría con el UNIQUE(fecha,
+  // branch_id) — no dependemos de upsert/onConflict porque falla en seco si
+  // ese constraint no está creado todavía en la base.
+  const query = existing
+    ? supabase.from('cash_cuts').update(payload).eq('id', existing.id)
+    : supabase.from('cash_cuts').insert([payload]);
+  const { data, error } = await query.select().single();
+
+  if (error) {
+    console.error('[closeCashCut] Error real de Supabase:', {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      fecha,
+      branch_id: getCurrentBranchId(),
+      existente: !!existing
+    });
+    throw new Error(`No se pudo cerrar el corte de caja: ${error.message}`);
+  }
+
+  return { ...data, esperado, diferencia: real - esperado };
+}
+
+// Historial de cortes cerrados/abiertos en un rango de fechas, para la
+// pantalla de Reportes (selección por fila -> detalle del día).
+async function getCashCutsHistory(dateFrom, dateTo) {
+  const { data, error } = await supabase
+    .from('cash_cuts')
+    .select('*')
+    .eq('branch_id', getCurrentBranchId())
+    .gte('fecha', dateFrom)
+    .lte('fecha', dateTo)
+    .order('fecha', { ascending: false });
+  must(error, 'No se pudo obtener el historial de cortes');
+  return data || [];
+}
+
+async function getCorteByFecha(fecha) {
+  const { data, error } = await supabase
+    .from('cash_cuts')
+    .select('*')
+    .eq('fecha', fecha)
+    .eq('branch_id', getCurrentBranchId())
+    .maybeSingle();
+  must(error, 'No se pudo obtener el corte de esa fecha');
+  return data;
 }
 
 // ==========================================================================
@@ -1141,6 +1467,25 @@ async function getPayrollWeek(weekStart) {
   });
 }
 
+// Deducciones de nómina pendientes de la semana: beneficio de empleado que
+// se fue a crédito (excedente sobre los $100/día, o "para llevar - crédito")
+// y aún no se ha descontado del pago. Reusa getPayrollWeek en vez de leer
+// employee_weekly_credit directamente (esa tabla tiene RLS y solo es legible
+// vía el RPC get_payroll_week_credit que ya envuelve getPayrollWeek).
+async function getPayrollDeductionsPendientes(weekStart) {
+  const week = await getPayrollWeek(weekStart);
+  return week
+    .filter((w) => w.weeklyCreditAmount + w.weeklyCashExtra > 0)
+    .map((w) => ({
+      employeeId: w.employeeId,
+      employeeName: w.employeeName,
+      weekStart,
+      creditoSemanal: w.weeklyCreditAmount,
+      efectivoExcedente: w.weeklyCashExtra,
+      totalDeducir: w.weeklyCreditAmount + w.weeklyCashExtra
+    }));
+}
+
 async function setPayrollBonus(payload) {
   const { data, error } = await supabase.rpc('set_payroll_bonus', {
     p_employee_id: payload.employeeId,
@@ -1159,6 +1504,225 @@ async function getPayrollHistory(filters = {}) {
   const { data, error } = await query;
   must(error, 'No se pudo obtener el historial de nómina');
   return data;
+}
+
+// ==========================================================================
+// 11B. NÓMINA CONFIGURABLE (día de pago, faltas, cierre semanal)
+// ==========================================================================
+async function getPayrollSettings() {
+  const settings = await getAllSettings();
+  let day = 'sabado';
+  let dayNumber = 6;
+  if (settings.payroll_payday) {
+    try {
+      const parsed = JSON.parse(settings.payroll_payday);
+      if (parsed.day) day = parsed.day;
+      if (Number.isInteger(parsed.day_number)) dayNumber = parsed.day_number;
+    } catch {
+      // valor legado/corrupto: se usa el default (sábado)
+    }
+  }
+  return { day, dayNumber };
+}
+
+// Semana laboral = 6 días hábiles (todos menos el día siguiente al de pago,
+// que es el descanso). Ej. payday=sábado -> semana domingo-sábado, descanso
+// implícito ninguno adicional; el divisor de tarifa diaria es 6 porque el
+// día de pago (o el día siguiente, según el negocio) no se exige asistencia.
+// Aquí se asume que el único día sin asistencia esperada es el que sigue al
+// de pago (domingo si payday=sábado).
+function faltaDeductionDivisor() {
+  return 6;
+}
+
+async function getEmployeesWithAttendanceHistory() {
+  const { data, error } = await supabase.from('attendance').select('employee_id');
+  must(error, 'No se pudo verificar el historial de asistencia');
+  return new Set((data || []).map((a) => a.employee_id));
+}
+
+async function getPayrollData(weekStart, weekEnd) {
+  const { data: employees, error: empErr } = await supabase
+    .from('employees').select('*').eq('active', true).order('name');
+  must(empErr, 'No se pudieron obtener los empleados');
+
+  const { data: deductions, error: dedErr } = await supabase
+    .from('payroll_deductions')
+    .select('*')
+    .eq('status', 'pendiente')
+    .gte('created_at', `${weekStart}T00:00:00`)
+    .lte('created_at', `${weekEnd}T23:59:59.999`);
+  must(dedErr, 'No se pudieron obtener las deducciones de nómina');
+
+  const { data: attendance, error: attErr } = await supabase
+    .from('attendance')
+    .select('employee_id, timestamp')
+    .gte('timestamp', `${weekStart}T00:00:00`)
+    .lte('timestamp', `${weekEnd}T23:59:59.999`);
+  must(attErr, 'No se pudo obtener la asistencia de la semana');
+
+  // Mientras un empleado no tenga NINGÚN registro histórico de asistencia,
+  // no se le calculan faltas: sin ese dato, "sin checar" no distingue entre
+  // "faltó" y "no se usa el checador para él", y descontarle el sueldo
+  // completo por defecto sería un error grave. En cuanto tenga al menos un
+  // registro alguna vez, el cálculo de faltas se activa solo para él.
+  const employeesWithAttendanceHistory = await getEmployeesWithAttendanceHistory();
+
+  // employee_consumption tiene RLS sin policy anon (ver comentario en
+  // getEmployeeDailyConsumption): el beneficio usado se calcula desde
+  // sales.employee_benefit_before/after, que sí es legible, igual que en
+  // getCorteResumen.
+  const { data: ventasEmpleado, error: consErr } = await supabase
+    .from('sales')
+    .select('employee_id, employee_benefit_before, employee_benefit_after')
+    .eq('client_type', 'employee')
+    .eq('status', 'completada')
+    .gte('created_at', `${weekStart}T00:00:00`)
+    .lte('created_at', `${weekEnd}T23:59:59.999`);
+  must(consErr, 'No se pudo obtener el beneficio de empleados de la semana');
+
+  const dedByEmployee = {};
+  (deductions || []).forEach((d) => {
+    const key = d.employee_name;
+    if (!dedByEmployee[key]) dedByEmployee[key] = { total: 0, count: 0 };
+    dedByEmployee[key].total += Number(d.amount) || 0;
+    dedByEmployee[key].count += 1;
+  });
+
+  const attByEmployee = {};
+  (attendance || []).forEach((a) => {
+    const key = a.employee_id;
+    if (!attByEmployee[key]) attByEmployee[key] = new Set();
+    attByEmployee[key].add(localDateStr(new Date(a.timestamp)));
+  });
+
+  const benefitByEmployee = {};
+  (ventasEmpleado || []).forEach((s) => {
+    const used = Math.max((Number(s.employee_benefit_before) || 0) - (Number(s.employee_benefit_after) || 0), 0);
+    benefitByEmployee[s.employee_id] = (benefitByEmployee[s.employee_id] || 0) + used;
+  });
+
+  const today = localDateStr(new Date());
+  const workDays = [];
+  const cursor = new Date(`${weekStart}T00:00:00`);
+  const endDate = new Date(`${weekEnd}T00:00:00`);
+  while (cursor <= endDate) {
+    const iso = localDateStr(cursor);
+    // Domingo (0) se asume descanso: no cuenta como falta si no hay asistencia.
+    if (cursor.getDay() !== 0 && iso <= today) workDays.push(iso);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return (employees || []).map((emp) => {
+    const salary = Number(emp.salary) || 0;
+    const creditos = dedByEmployee[emp.name]?.total || 0;
+    const creditosCount = dedByEmployee[emp.name]?.count || 0;
+    const tieneHistorialAsistencia = employeesWithAttendanceHistory.has(emp.id);
+    const diasAsistidos = attByEmployee[emp.id] || new Set();
+    const faltas = tieneHistorialAsistencia ? workDays.filter((d) => !diasAsistidos.has(d)).length : 0;
+    const deduccionFaltas = Math.round((salary / faltaDeductionDivisor()) * faltas * 100) / 100;
+    const beneficioUsado = benefitByEmployee[emp.id] || 0;
+    const totalAPagar = Math.max(salary - creditos - deduccionFaltas, 0);
+
+    return {
+      employeeId: emp.id,
+      employeeName: emp.name,
+      sueldoBase: salary,
+      creditos,
+      creditosCount,
+      faltas,
+      deduccionFaltas,
+      beneficioUsado,
+      totalAPagar,
+      sinHistorialAsistencia: !tieneHistorialAsistencia
+    };
+  });
+}
+
+async function getPayrollDetail(employeeName, weekStart, weekEnd) {
+  const { data: creditos, error: credErr } = await supabase
+    .from('payroll_deductions')
+    .select('*')
+    .eq('employee_name', employeeName)
+    .eq('status', 'pendiente')
+    .gte('created_at', `${weekStart}T00:00:00`)
+    .lte('created_at', `${weekEnd}T23:59:59.999`)
+    .order('created_at', { ascending: false });
+  must(credErr, 'No se pudieron obtener los créditos del empleado');
+
+  const { data: employee, error: empErr } = await supabase
+    .from('employees').select('id').eq('name', employeeName).maybeSingle();
+  must(empErr);
+
+  let faltasDias = [];
+  if (employee) {
+    const { count: historyCount, error: histErr } = await supabase
+      .from('attendance')
+      .select('id', { count: 'exact', head: true })
+      .eq('employee_id', employee.id);
+    must(histErr);
+
+    const { data: attendance, error: attErr } = await supabase
+      .from('attendance')
+      .select('timestamp')
+      .eq('employee_id', employee.id)
+      .gte('timestamp', `${weekStart}T00:00:00`)
+      .lte('timestamp', `${weekEnd}T23:59:59.999`);
+    must(attErr);
+    const diasAsistidos = historyCount > 0
+      ? new Set((attendance || []).map((a) => localDateStr(new Date(a.timestamp))))
+      : null;
+    if (diasAsistidos) {
+      const today = localDateStr(new Date());
+      const cursor = new Date(`${weekStart}T00:00:00`);
+      const endDate = new Date(`${weekEnd}T00:00:00`);
+      while (cursor <= endDate) {
+        const iso = localDateStr(cursor);
+        if (cursor.getDay() !== 0 && iso <= today && !diasAsistidos.has(iso)) faltasDias.push(iso);
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    }
+  }
+
+  return { creditos: creditos || [], faltasDias };
+}
+
+// Cierra la nómina de la semana: guarda un snapshot por empleado en
+// payroll_history y marca las deducciones consideradas como 'descontado'
+// para que no se vuelvan a contar en semanas futuras.
+async function closePayrollWeek(weekStart, weekEnd, closedBy) {
+  const rows = await getPayrollData(weekStart, weekEnd);
+
+  const snapshot = rows.map((r) => ({
+    week_start: weekStart,
+    week_end: weekEnd,
+    employee_id: r.employeeId,
+    employee_name: r.employeeName,
+    sueldo_base: r.sueldoBase,
+    creditos: r.creditos,
+    faltas: r.faltas,
+    deduccion_faltas: r.deduccionFaltas,
+    beneficio_usado: r.beneficioUsado,
+    total_pagado: r.totalAPagar,
+    cerrado_por: closedBy || 'admin'
+  }));
+
+  if (snapshot.length > 0) {
+    const { error: histErr } = await supabase
+      .from('payroll_history')
+      .upsert(snapshot, { onConflict: 'week_start,employee_id' });
+    must(histErr, 'No se pudo guardar el historial de nómina');
+  }
+
+  const { error: updErr } = await supabase
+    .from('payroll_deductions')
+    .update({ status: 'descontado' })
+    .eq('status', 'pendiente')
+    .gte('created_at', `${weekStart}T00:00:00`)
+    .lte('created_at', `${weekEnd}T23:59:59.999`);
+  must(updErr, 'No se pudo cerrar la nómina');
+
+  return { closed: true, employees: snapshot.length };
 }
 
 // ==========================================================================
@@ -1235,6 +1799,14 @@ module.exports = {
   getAllCosts,
   createCost,
   removeCost,
+  // corte de caja
+  getCorteResumen,
+  setCashCutFondoInicial,
+  createCashMovement,
+  removeCashMovement,
+  closeCashCut,
+  getCashCutsHistory,
+  getCorteByFecha,
   // reportes
   computeProfitability,
   // empleados / asistencia
@@ -1248,8 +1820,14 @@ module.exports = {
   getEmployeeDailyConsumption,
   // nómina
   getPayrollWeek,
+  getPayrollDeductionsPendientes,
   setPayrollBonus,
   getPayrollHistory,
+  getWeekRange,
+  getPayrollSettings,
+  getPayrollData,
+  getPayrollDetail,
+  closePayrollWeek,
   // ajustes
   getAllSettings,
   setSetting

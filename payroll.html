@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Nómina</title>
+  <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="costs.css">
+  <link rel="stylesheet" href="corte.css">
+  <link rel="stylesheet" href="payroll.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Nómina</h1>
+          <span id="payroll-week-label">Semana —</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div class="payroll-toolbar">
+        <button id="btn-prev-week" class="btn btn-outline btn-sm">&#8592; Semana anterior</button>
+        <button id="btn-next-week" class="btn btn-outline btn-sm">Semana siguiente &#8594;</button>
+        <div style="flex:1;"></div>
+        <button id="btn-cerrar-nomina" class="btn btn-brand">Cerrar nómina</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Empleado</th>
+              <th>Sueldo Base</th>
+              <th>Créditos consumo</th>
+              <th>Faltas</th>
+              <th>Deducción faltas</th>
+              <th>Beneficio $100</th>
+              <th>Total a pagar</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="payroll-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="payroll-detail-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2 id="payroll-detail-title">Detalle</h2>
+      <div class="section-toolbar" style="margin-top:10px;">
+        <h2 style="font-size:0.95rem;">Créditos de consumo (excedente a nómina)</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Fecha</th><th>Motivo</th><th>Monto</th></tr></thead>
+          <tbody id="payroll-detail-creditos-tbody"></tbody>
+        </table>
+      </div>
+      <div class="section-toolbar" style="margin-top:16px;">
+        <h2 style="font-size:0.95rem;">Faltas</h2>
+      </div>
+      <div id="payroll-detail-faltas"></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-close-detail">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="payroll-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

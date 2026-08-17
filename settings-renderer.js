@@ -1,3 +1,5 @@
+const PAYROLL_DAY_NAMES = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+
 async function loadSettings() {
   const settings = await window.db.settings.getAll();
   document.getElementById('set-business-name').value = settings.business_name || '';
@@ -6,6 +8,17 @@ async function loadSettings() {
   document.getElementById('set-employee-discount').value = settings.employee_discount_pct || '15';
   document.getElementById('set-table-count').value = settings.table_count || '10';
   document.getElementById('set-ticket-width').value = settings.ticket_width || '58';
+
+  let paydayNumber = 6;
+  if (settings.payroll_payday) {
+    try {
+      const parsed = JSON.parse(settings.payroll_payday);
+      if (Number.isInteger(parsed.day_number)) paydayNumber = parsed.day_number;
+    } catch {
+      // valor legado/corrupto: se deja el default (sábado)
+    }
+  }
+  document.getElementById('set-payroll-payday').value = String(paydayNumber);
 
   await loadPrinters(settings.printer_name || '');
 
@@ -55,6 +68,8 @@ async function loadPrinters(selected) {
 document.getElementById('btn-refresh-printers').addEventListener('click', () => loadPrinters(document.getElementById('set-printer-name').value));
 
 document.getElementById('btn-save-settings').addEventListener('click', async () => {
+  const paydayNumber = Number(document.getElementById('set-payroll-payday').value);
+
   const entries = {
     business_name: document.getElementById('set-business-name').value.trim() || 'Wings House',
     business_address: document.getElementById('set-business-address').value.trim(),
@@ -62,7 +77,8 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     employee_discount_pct: document.getElementById('set-employee-discount').value || '15',
     table_count: document.getElementById('set-table-count').value || '10',
     printer_name: document.getElementById('set-printer-name').value,
-    ticket_width: document.getElementById('set-ticket-width').value
+    ticket_width: document.getElementById('set-ticket-width').value,
+    payroll_payday: JSON.stringify({ day: PAYROLL_DAY_NAMES[paydayNumber], day_number: paydayNumber })
   };
 
   try {

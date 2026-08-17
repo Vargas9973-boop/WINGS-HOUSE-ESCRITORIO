@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wings House - Corte de Caja</title>
+  <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="corte.css">
+</head>
+<body>
+  <div class="module-shell">
+    <header class="module-header">
+      <div class="header-left">
+        <button class="btn-icon-back" data-nav-home>&#8592;</button>
+        <img src="logo.png" alt="Wings House" class="header-logo">
+        <div class="module-title">
+          <h1>Corte de Caja</h1>
+          <span>Fondo, ventas del día y salidas de efectivo</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="module-body">
+      <div class="corte-toolbar">
+        <div class="field">
+          <label>Fecha</label>
+          <input type="date" id="corte-fecha">
+        </div>
+        <div class="field">
+          <label>Fondo inicial</label>
+          <input type="number" id="fondo-inicial-input" min="0" step="0.01">
+        </div>
+        <button id="btn-guardar-fondo" class="btn btn-outline btn-sm">Guardar fondo</button>
+        <span id="corte-status">—</span>
+      </div>
+
+      <div class="corte-grid">
+        <div>
+          <div class="section-toolbar">
+            <h2>Salidas de caja</h2>
+            <button id="btn-new-salida" class="btn btn-brand">+ Agregar salida</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr><th>Hora</th><th>Concepto</th><th>Categoría</th><th>Método</th><th>Monto</th><th></th></tr>
+              </thead>
+              <tbody id="movimientos-tbody"></tbody>
+            </table>
+          </div>
+
+          <div class="efectivo-real-row">
+            <div class="field">
+              <label>Efectivo real contado</label>
+              <input type="number" id="efectivo-real-input" min="0" step="0.01" placeholder="0.00">
+            </div>
+            <button id="btn-cerrar-corte" class="btn btn-brand">Cerrar corte</button>
+          </div>
+        </div>
+
+        <div class="ticket-panel">
+          <div id="ticket"></div>
+          </div>
+          <button id="btnImprimirCorte" class="btn btn-brand" style="width:100%; margin-top:12px; padding:14px;">🖨️ Imprimir Ticket 58mm</button>
+      </div>
+    </div>
+  </div>
+    
+
+  <div id="salida-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Agregar salida</h2>
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Concepto</label>
+          <input type="text" id="salida-concepto" placeholder="Ej. Pago repartidor, bolsas de basura...">
+        </div>
+        <div class="field">
+          <label>Monto</label>
+          <input type="number" id="salida-monto" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Método de pago</label>
+          <select id="salida-metodo">
+            <option value="efectivo">Efectivo</option>
+            <option value="tarjeta">Tarjeta</option>
+            <option value="transferencia">Transferencia</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Categoría</label>
+          <select id="salida-categoria">
+            <option value="repartidores">Repartidores</option>
+            <option value="basura">Basura</option>
+            <option value="insumos">Insumos</option>
+            <option value="otros">Otros</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-salida">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-salida">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="ticket-corte.js"></script>
+  <script src="corte-renderer.js"></script>
+  <script src="order-alert.js"></script>
+</body>
+</html>

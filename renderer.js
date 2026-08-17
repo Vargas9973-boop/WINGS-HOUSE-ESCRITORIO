@@ -5,8 +5,10 @@ const ALL_MENU_ITEMS = [
   { id: 'inventarios', title: 'INVENTARIOS', icon: '📦', desc: 'Gestión de Stock de Insumos', action: 'open-inventory', roles: ['admin'] },
   { id: 'merma', title: 'MERMA', icon: '🗑️', desc: 'Control de Desperdicios y Bajas', action: 'open-waste', roles: ['admin'] },
   { id: 'costos', title: 'COSTOS', icon: '📊', desc: 'Análisis de Rentabilidad y Gastos', action: 'open-costs', roles: ['admin'] },
+  { id: 'corte', title: 'CORTE DE CAJA', icon: '🧾', desc: 'Cierre de Caja Diario', action: 'open-corte', roles: ['admin', 'cajero'] },
   { id: 'reportes', title: 'REPORTES', icon: '📑', desc: 'Exportación Diaria, Semanal y Mensual', action: 'open-reports', roles: ['admin'] },
-  { id: 'asistencia', title: 'ASISTENCIA', icon: '⏱️', desc: 'Horarios, Empleados y Nómina', action: 'open-attendance', roles: ['admin', 'empleado'] },
+  { id: 'asistencia', title: 'ASISTENCIA', icon: '⏱️', desc: 'Horarios y Empleados', action: 'open-attendance', roles: ['admin', 'empleado'] },
+  { id: 'nomina', title: 'NÓMINA', icon: '💵', desc: 'Pago Semanal, Créditos y Faltas', action: 'open-payroll', roles: ['admin'] },
   { id: 'cuentas', title: 'CUENTAS', icon: '🔐', desc: 'Usuarios y Roles del Sistema', action: 'open-accounts', roles: ['admin'] },
   { id: 'ajustes', title: 'AJUSTES', icon: '⚙️', desc: 'Impresora, Negocio y Descuentos', action: 'open-settings', roles: ['admin'] }
 ];

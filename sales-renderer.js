@@ -11,6 +11,7 @@ let selectedEmployeeSaleType = null;
 let selectedEmployeeExtraPayment = null;
 let employeeConsumptionRefreshTimer = null;
 const EMPLOYEE_CONSUMPTION_REFRESH_MS = 5000;
+let employeeAvailableCache = 100; // último "disponible" consultado, para calcular a cobrar sin esperar al RPC en cada tecleo
 let cart = [];
 let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
@@ -89,6 +90,7 @@ function ensureEmployeeSelector() {
 
       <div id="employee-extra-payment-info" class="employee-info"></div>
     </div>
+    <div id="employee-amount-due-info" class="employee-info" style="font-weight:700; margin-top:8px;"></div>
 `;
   const anchor = productsGrid?.parentElement || document.body;
   anchor.insertBefore(panel, productsGrid || null);
@@ -191,11 +193,14 @@ panel.querySelector('#employee-sale-type').addEventListener('change', (e) => {
                 : 'none';
     }
 
+    updateEmployeeAmountDue();
+
 });
 
 panel.querySelector('#employee-extra-payment').addEventListener('change', (e) => {
 
     selectedEmployeeExtraPayment = e.target.value || null;
+    updateEmployeeAmountDue();
 
 });
 
@@ -237,6 +242,8 @@ async function refreshEmployeeConsumptionDisplay() {
       0
     );
 
+    employeeAvailableCache = available;
+
     info.textContent =
       `ID: ${emp.id} · ${emp.role || 'Personal'} · ` +
       `CONSUMO REAL: $${consumption.toFixed(2)} · ` +
@@ -252,6 +259,84 @@ async function refreshEmployeeConsumptionDisplay() {
     info.textContent =
       `ID: ${emp.id} · ${emp.role || 'Personal'} · ` +
       'No se pudo consultar el consumo de hoy.';
+  }
+
+  updateEmployeeAmountDue();
+}
+
+// ==========================================================================
+// A COBRAR REAL DEL EMPLEADO
+// El beneficio ($100/día) y el crédito de nómina nunca deben cobrarse en
+// caja: esta función calcula lo que sí hay que cobrar (si acaso) para que
+// el checkout no le pida al cajero el total bruto del pedido.
+// ==========================================================================
+// Estimación (síncrona, con el último "disponible" consultado) de cuánto
+// hay que cobrar realmente. No sustituye el cálculo autoritativo del RPC en
+// el backend, solo evita pedirle caja de más al cajero en el checkout.
+function estimateEmployeeAmountDue() {
+  if (currentClientType !== 'employee' || !selectedEmployeeSaleType) return null;
+  const { total } = cartTotals();
+  if (selectedEmployeeSaleType === 'takeaway_credit') return 0;
+  const benefit = Math.min(total, employeeAvailableCache);
+  const extra = Math.max(total - benefit, 0);
+  return selectedEmployeeExtraPayment === 'credit' ? 0 : extra;
+}
+
+function updateEmployeeAmountDue() {
+  const panel = document.getElementById('employee-selector-panel');
+  if (!panel) return;
+  const dueInfo = panel.querySelector('#employee-amount-due-info');
+  if (!dueInfo) return;
+
+  if (currentClientType !== 'employee' || !selectedEmployeeId || !selectedEmployeeSaleType) {
+    dueInfo.textContent = '';
+    return;
+  }
+
+  const { total } = cartTotals();
+
+  if (selectedEmployeeSaleType === 'takeaway_credit') {
+    dueInfo.textContent = `Todo va a crédito de nómina · $0.00 a cobrar hoy.`;
+    return;
+  }
+
+  const benefit = Math.min(total, employeeAvailableCache);
+  const extra = Math.max(total - benefit, 0);
+
+  if (extra === 0) {
+    dueInfo.textContent = `Beneficio: ${fmt(benefit)} · Cubierto por completo · $0.00 a cobrar.`;
+  } else if (selectedEmployeeExtraPayment === 'credit') {
+    dueInfo.textContent = `Beneficio: ${fmt(benefit)} · Excedente a crédito de nómina: ${fmt(extra)} · $0.00 a cobrar hoy.`;
+  } else {
+    dueInfo.textContent = `Beneficio: ${fmt(benefit)} · A cobrar en efectivo: ${fmt(extra)}.`;
+  }
+}
+
+// Refleja lo mismo dentro del modal de cobro: oculta los métodos de pago y
+// el campo de efectivo cuando no hay nada que cobrar (beneficio completo o
+// crédito de nómina), y muestra "A cobrar" en vez del total bruto.
+function updateCheckoutModalForEmployee() {
+  const dueRow = document.getElementById('checkout-employee-due');
+  const dueAmountEl = document.getElementById('checkout-employee-due-amount');
+  const payMethodsWrap = document.getElementById('checkout-pay-methods-wrap');
+  const due = estimateEmployeeAmountDue();
+
+  if (due == null) {
+    dueRow.style.display = 'none';
+    payMethodsWrap.style.display = 'block';
+    cashFields.style.display = selectedPayMethod === 'efectivo' ? 'block' : 'none';
+    return;
+  }
+
+  dueRow.style.display = 'flex';
+  dueAmountEl.textContent = fmt(due);
+
+  if (due === 0) {
+    payMethodsWrap.style.display = 'none';
+    cashFields.style.display = 'none';
+  } else {
+    payMethodsWrap.style.display = 'none'; // el excedente en efectivo ya se decide en "Pago del excedente"
+    cashFields.style.display = 'block';
   }
 }
 
@@ -307,6 +392,7 @@ function updateEmployeeSelectorVisibility() {
     saleTypeSelect.value = '';
   }
 }
+  updateEmployeeAmountDue();
 }
 
 
@@ -646,6 +732,7 @@ function updateCartSummary() {
   subtotalEl.textContent = fmt(subtotal);
   discountEl.textContent = `-${fmt(discount)}`;
   totalEl.textContent = fmt(total);
+  updateEmployeeAmountDue();
 }
 
 btnClearCart.addEventListener('click', () => {
@@ -664,7 +751,7 @@ btnCheckout.addEventListener('click', () => {
   changeAmountEl.textContent = fmt(0);
   selectedPayMethod = 'efectivo';
   document.querySelectorAll('.pay-method-btn').forEach((b) => b.classList.toggle('active', b.dataset.method === 'efectivo'));
-  cashFields.style.display = 'block';
+  updateCheckoutModalForEmployee();
   checkoutModal.classList.add('show');
   amountReceivedInput.focus();
 });
@@ -676,14 +763,15 @@ document.querySelectorAll('.pay-method-btn').forEach((btn) => {
     document.querySelectorAll('.pay-method-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     selectedPayMethod = btn.dataset.method;
-    cashFields.style.display = selectedPayMethod === 'efectivo' ? 'block' : 'none';
+    updateCheckoutModalForEmployee();
   });
 });
 
 amountReceivedInput.addEventListener('input', () => {
-  const { total } = cartTotals();
+  const due = estimateEmployeeAmountDue();
+  const amountDue = due != null ? due : cartTotals().total;
   const received = Number(amountReceivedInput.value) || 0;
-  const change = received - total;
+  const change = received - amountDue;
   changeAmountEl.textContent = fmt(change > 0 ? change : 0);
 });
 
@@ -792,16 +880,54 @@ btnConfirmCheckout.addEventListener('click', async () => {
   }
 
   // ================================================================
+  // MONTO REAL A COBRAR
+  // El beneficio ($100/día) y el excedente a crédito de nómina nunca pasan
+  // por caja: solo se cobra el excedente en efectivo, y solo si el
+  // consumo es 'daily_100' con employeeExtraPayment = 'cash'. 'takeaway_credit'
+  // siempre es $0 a cobrar (todo va a crédito semanal).
+  // ================================================================
+
+  const amountDue =
+    currentClientType === 'employee'
+      ? (selectedEmployeeSaleType === 'takeaway_credit' ? 0 : employeeExtraAmount)
+      : total;
+
+  // ================================================================
+  // MÉTODO DE PAGO REAL
+  // Sustituye el botón Efectivo/Tarjeta/Transferencia cuando la venta es
+  // de empleado: ese selector no aplica a lo que en realidad pasó con el
+  // dinero (beneficio comido / crédito de nómina), así que se fuerza un
+  // valor que corte de caja y reportes puedan reconocer sin ambigüedad.
+  // ================================================================
+
+  let effectivePaymentMethod = selectedPayMethod;
+
+  if (currentClientType === 'employee') {
+    if (selectedEmployeeSaleType === 'takeaway_credit') {
+      effectivePaymentMethod = 'credito_nomina';
+    } else if (amountDue === 0) {
+      effectivePaymentMethod = 'beneficio_empleado';
+    } else if (selectedEmployeeExtraPayment === 'credit') {
+      effectivePaymentMethod = 'credito_nomina';
+    } else {
+      effectivePaymentMethod = 'efectivo';
+    }
+  }
+
+  // ================================================================
   // COBRO EN EFECTIVO
   // ================================================================
 
-  if (selectedPayMethod === 'efectivo') {
+  if (amountDue === 0) {
+    amountReceived = 0;
+    changeGiven = 0;
+  } else if (effectivePaymentMethod === 'efectivo') {
     amountReceived =
       Number(amountReceivedInput.value) || 0;
 
-    if (amountReceived < total) {
+    if (amountReceived < amountDue) {
       toast(
-        'El monto recibido es menor al total.',
+        'El monto recibido es menor al monto a cobrar.',
         'error'
       );
 
@@ -809,7 +935,7 @@ btnConfirmCheckout.addEventListener('click', async () => {
       return;
     }
 
-    changeGiven = amountReceived - total;
+    changeGiven = amountReceived - amountDue;
   }
 
   // ================================================================
@@ -838,7 +964,7 @@ btnConfirmCheckout.addEventListener('click', async () => {
     discount,
     total,
 
-    paymentMethod: selectedPayMethod,
+    paymentMethod: effectivePaymentMethod,
 
     amountReceived,
     changeGiven,

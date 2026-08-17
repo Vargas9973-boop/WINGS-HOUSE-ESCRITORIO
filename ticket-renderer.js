@@ -7,7 +7,9 @@ function paymentLabel(method) {
         efectivo: 'Efectivo',
         tarjeta: 'Tarjeta',
         transferencia: 'Transferencia',
-        credito: 'Crédito'
+        credito: 'Crédito',
+        credito_nomina: 'Crédito Nómina',
+        beneficio_empleado: 'Beneficio Empleado'
     }[method] || method || '';
 }
 

@@ -108,8 +108,10 @@ const PAGES = {
   'open-inventory': 'inventory.html',
   'open-waste': 'waste.html',
   'open-costs': 'costs.html',
+  'open-corte': 'corte.html',
   'open-reports': 'reports.html',
   'open-attendance': 'attendance.html',
+  'open-payroll': 'payroll.html',
   'open-accounts': 'accounts.html',
   'open-settings': 'settings.html'
 };
@@ -357,8 +359,31 @@ function registerIpcHandlers() {
   safeHandle('costs:create', (data) => db.createCost(data));
   safeHandle('costs:remove', (id) => db.removeCost(id));
 
+    // ------------------------------------------------------------------
+  // CORTE DE CAJA
+  // ------------------------------------------------------------------
+  safeHandle('corte:getResumen', (fecha) => db.getCorteResumen(fecha));
+  safeHandle('corte:setFondoInicial', (fecha, fondoInicial) => db.setCashCutFondoInicial(fecha, fondoInicial));
+  safeHandle('corte:addMovimiento', (data) => db.createCashMovement(data));
+  safeHandle('corte:removeMovimiento', (id) => db.removeCashMovement(id));
+  safeHandle('corte:cerrar', (fecha, efectivoReal) =>
+    db.closeCashCut(fecha, efectivoReal, currentSession ? currentSession.username : null));
+  safeHandle('corte:getByFecha', (fecha) => db.getCorteByFecha(fecha));
+
+  safeHandle('corte:printTicket', async (html) => {
+    const win = new BrowserWindow({ show: false, width: 302, height: 800, webPreferences: { offscreen: true } });
+    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    await new Promise(r => setTimeout(r, 800));
+    win.webContents.print({ silent: false, printBackground: true }, () => {
+      setTimeout(() => { if (!win.isDestroyed()) win.close(); }, 1000);
+    });
+    return true;
+  });
+
   safeHandle('reports:profitability', (filters = {}) =>
     db.computeProfitability(filters.dateFrom || '2000-01-01', filters.dateTo || '2999-12-31'));
+  safeHandle('reports:cortes', (f = {}) =>
+    db.getCashCutsHistory(f.dateFrom || '2000-01-01', f.dateTo || '2999-12-31'));
 
   // ------------------------------------------------------------------
   // EMPLEADOS Y ASISTENCIA
@@ -378,6 +403,17 @@ function registerIpcHandlers() {
   safeHandle('payroll:getWeek', (weekStart) => db.getPayrollWeek(weekStart));
   safeHandle('payroll:setBonus', (payload) => db.setPayrollBonus(payload));
   safeHandle('payroll:history', (filters = {}) => db.getPayrollHistory(filters));
+  safeHandle('payroll:pendientes', (weekStart) => db.getPayrollDeductionsPendientes(weekStart));
+
+  // ------------------------------------------------------------------
+  // NÓMINA CONFIGURABLE (día de pago, faltas, cierre semanal)
+  // ------------------------------------------------------------------
+  safeHandle('payroll:getSettings', () => db.getPayrollSettings());
+  safeHandle('payroll:getWeekRange', (paydayNumber, referenceDate) => db.getWeekRange(paydayNumber, referenceDate));
+  safeHandle('payroll:getData', (weekStart, weekEnd) => db.getPayrollData(weekStart, weekEnd));
+  safeHandle('payroll:getDetail', (employeeName, weekStart, weekEnd) => db.getPayrollDetail(employeeName, weekStart, weekEnd));
+  safeHandle('payroll:close', (weekStart, weekEnd) =>
+    db.closePayrollWeek(weekStart, weekEnd, currentSession ? currentSession.username : null));
 
   // ------------------------------------------------------------------
   // AJUSTES

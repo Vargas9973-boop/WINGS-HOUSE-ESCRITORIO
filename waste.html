@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wings House - Merma</title>
   <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="costs.css">
 </head>
 <body>
   <div class="module-shell">
@@ -28,6 +29,17 @@
         <button id="btn-new-waste" class="btn btn-brand">+ Registrar merma</button>
       </div>
 
+      <div class="date-filters" style="margin-bottom:14px;">
+        <div class="field" style="min-width:200px;">
+          <label>Filtrar por tipo</label>
+          <select id="filter-tipo">
+            <option value="">Todos</option>
+            <option value="merma">Merma</option>
+            <option value="consumo_interno">Consumo Jefes</option>
+          </select>
+        </div>
+      </div>
+
       <div class="table-wrap">
         <table class="data-table">
           <thead>
@@ -35,6 +47,7 @@
               <th>Fecha</th>
               <th>Insumo / Producto</th>
               <th>Cantidad</th>
+              <th>Tipo</th>
               <th>Motivo</th>
               <th>Costo</th>
             </tr>
@@ -70,6 +83,17 @@
             <option value="Devolución de cliente">Devolución de cliente</option>
             <option value="Otro">Otro</option>
           </select>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Tipo</label>
+          <select id="tipo">
+            <option value="merma">Merma</option>
+            <option value="consumo_interno">Consumo Jefes</option>
+          </select>
+        </div>
+        <div class="field" id="autorizado-por-field" style="grid-column: 1 / -1; display:none;">
+          <label>Autorizado por</label>
+          <input type="text" id="autorizado_por" placeholder="Jefe que autoriza">
         </div>
       </div>
       <div class="modal-actions">

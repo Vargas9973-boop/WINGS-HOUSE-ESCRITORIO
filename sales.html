@@ -28,14 +28,20 @@
       <h2>Procesar Pago</h2>
 
       <div class="checkout-total">
-        <span>Total a cobrar</span>
+        <span>Total del pedido</span>
         <strong id="checkout-total-amount">$0.00</strong>
       </div>
+      <div id="checkout-employee-due" class="checkout-total" style="display:none;">
+        <span>A cobrar</span>
+        <strong id="checkout-employee-due-amount">$0.00</strong>
+      </div>
 
-      <div class="pay-methods">
-        <button class="pay-method-btn active" data-method="efectivo">Efectivo</button>
-        <button class="pay-method-btn" data-method="tarjeta">Tarjeta</button>
-        <button class="pay-method-btn" data-method="transferencia">Transferencia</button>
+      <div id="checkout-pay-methods-wrap">
+        <div class="pay-methods">
+          <button class="pay-method-btn active" data-method="efectivo">Efectivo</button>
+          <button class="pay-method-btn" data-method="tarjeta">Tarjeta</button>
+          <button class="pay-method-btn" data-method="transferencia">Transferencia</button>
+        </div>
       </div>
 
       <div id="cash-fields" class="cash-fields">

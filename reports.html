@@ -7,6 +7,7 @@
   <title>Wings House - Reportes</title>
   <link rel="stylesheet" href="common.css">
   <link rel="stylesheet" href="costs.css">
+  <link rel="stylesheet" href="corte.css">
   <link rel="stylesheet" href="reports.css">
 </head>
 <body>
@@ -66,6 +67,45 @@
       </div>
 
       <div class="section-toolbar" style="margin-top:28px;">
+        <h2>Historial de cortes de caja</h2>
+      </div>
+      <div class="date-filters" style="margin-bottom:14px;">
+        <input type="date" id="cortes-from">
+        <span>a</span>
+        <input type="date" id="cortes-to">
+        <button id="btn-buscar-cortes" class="btn btn-outline btn-sm">Buscar</button>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title">Cortes en el rango</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Fecha</th><th>Fondo</th><th>Efectivo real</th><th>Estado</th></tr></thead>
+              <tbody id="cortes-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Detalle del corte seleccionado</div>
+          <div id="corte-detalle"><div class="empty-state">Selecciona una fecha del historial.</div></div>
+          <button id="btn-reimprimir-corte" class="btn btn-brand" style="width:100%; margin-top:12px;" disabled>🖨️ Reimprimir ticket</button>
+        </div>
+      </div>
+
+      <div class="section-toolbar" style="margin-top:28px;">
+        <h2>Deducciones de nómina pendientes (semana actual)</h2>
+      </div>
+      <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+        Excedente de beneficio de empleado ($100/día) que se fue a crédito semanal — se descuenta del pago del sábado.
+      </p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Empleado</th><th>Crédito semanal</th><th>Efectivo excedente</th><th>Total a descontar</th></tr></thead>
+          <tbody id="payroll-pendientes-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="section-toolbar" style="margin-top:28px;">
         <h2>Exportar datos del periodo seleccionado</h2>
       </div>
       <div id="export-grid" class="export-grid">
@@ -89,6 +129,7 @@
   </div>
 
   <script src="common.js"></script>
+  <script src="ticket-corte.js"></script>
   <script src="reports-renderer.js"></script>
   <script src="order-alert.js"></script>
 </body>
