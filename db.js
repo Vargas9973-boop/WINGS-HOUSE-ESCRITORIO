@@ -788,18 +788,23 @@ async function comandaAddItem(saleId, item) {
 }
 
 async function comandaUpdateItemQty(itemId, quantity) {
-  const { data: saleId, error } = await supabase.rpc('comanda_update_item_qty', { p_item_id: itemId, p_quantity: quantity });
+  const p_item_id = Number(itemId);
+  const p_quantity = Number(quantity);
+  if (!Number.isFinite(p_item_id) || !Number.isFinite(p_quantity)) {
+    console.error('comandaUpdateItemQty recibió valores no numéricos', { itemId, quantity });
+    throw new Error('ID de artículo o cantidad inválidos.');
+  }
+  // comanda_update_item_qty ya devuelve la venta actualizada (row_to_json),
+  // no un id: no hay que volver a consultarla.
+  const { data: sale, error } = await supabase.rpc('comanda_update_item_qty', { p_item_id, p_quantity });
   must(error, 'No se pudo actualizar la cantidad');
-  const { data: sale, error: selErr } = await supabase.from('sales').select('*').eq('id', saleId).single();
-  must(selErr);
   return sale;
 }
 
 async function comandaRemoveItem(itemId) {
-  const { data: saleId, error } = await supabase.rpc('comanda_remove_item', { p_item_id: itemId });
+  // comanda_remove_item también devuelve la venta actualizada directamente.
+  const { data: sale, error } = await supabase.rpc('comanda_remove_item', { p_item_id: itemId });
   must(error, 'No se pudo quitar el artículo');
-  const { data: sale, error: selErr } = await supabase.from('sales').select('*').eq('id', saleId).single();
-  must(selErr);
   return sale;
 }
 
