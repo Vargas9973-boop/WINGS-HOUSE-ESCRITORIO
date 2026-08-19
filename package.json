@@ -8,7 +8,9 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "test:mem": "node scripts/memory-leak-test.js",
+    "test:stability": "node scripts/stability-test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

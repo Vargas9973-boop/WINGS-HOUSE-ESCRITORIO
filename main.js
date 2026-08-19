@@ -17,6 +17,20 @@ const attendanceProvider = require('./attendanceProvider'); // lector de huella 
 // ==========================================================================
 let kdsWindow = null;
 
+// ==========================================================================
+// DIAGNÓSTICO DE MEMORIA (solo fuera de producción) -- ver
+// scripts/memory-leak-test.js / scripts/stability-test.js (npm run
+// test:mem / test:stability) para el chequeo automatizado; esto es el
+// mismo dato pero visible en vivo en la consola de `npm start` mientras se
+// usa la app de verdad, sin tener que esperar a correr el script aparte.
+// ==========================================================================
+if (process.env.NODE_ENV !== 'production') {
+  setInterval(() => {
+    const heapMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    console.log(`[MEM] heap: ${heapMb}mb`);
+  }, 30000);
+}
+
 // Config LOCAL (por instalación/PC, no en Supabase): si esta PC en concreto
 // tiene la TV de cocina conectada, debe autoarrancar el KDS; otra
 // instalación del mismo negocio sin TV no debe. Por eso es un archivo en
@@ -25,17 +39,20 @@ function getKdsConfigPath() {
   return path.join(app.getPath('userData'), 'kds-config.json');
 }
 
-function readKdsConfig() {
+async function readKdsConfig() {
   try {
-    return JSON.parse(fs.readFileSync(getKdsConfigPath(), 'utf8'));
+    return JSON.parse(await fs.promises.readFile(getKdsConfigPath(), 'utf8'));
   } catch (err) {
     return { kdsAutoStart: true }; // primer arranque: no existe el archivo todavía
   }
 }
 
-function writeKdsConfig(cfg) {
+// Sin uso todavía (no hay UI conectada a esto -- ver Ajustes), pero se deja
+// async por consistencia con readKdsConfig y para no reintroducir una
+// escritura síncrona en el proceso principal el día que se conecte.
+async function writeKdsConfig(cfg) {
   try {
-    fs.writeFileSync(getKdsConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
+    await fs.promises.writeFile(getKdsConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
   } catch (err) {
     console.error('No se pudo guardar kds-config.json:', err.message);
   }
@@ -312,7 +329,8 @@ app.whenReady().then(async () => {
   // pantalla conectada -- si no, no tiene sentido abrir una ventana extra
   // encima de la principal.
   const { screen } = require('electron');
-  if (readKdsConfig().kdsAutoStart === true && screen.getAllDisplays().length > 1) {
+  const kdsConfig = await readKdsConfig();
+  if (kdsConfig.kdsAutoStart === true && screen.getAllDisplays().length > 1) {
     createKDSWindow();
   }
 
