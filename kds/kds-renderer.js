@@ -4,6 +4,12 @@
 let latestOrders = [];
 const alreadyBeeped = new Set(); // ids que ya sonaron por pasar 18 min, para no repetir cada segundo
 
+// Atajos de teclado (N/R/Esc) -- ver más abajo, cerca de setInterval(render).
+// selectedIndex es una posición dentro de latestOrders (ya viene ordenado
+// por created_at asc, el más urgente primero), no dentro de una columna: la
+// tarjeta seleccionada puede estar en cualquiera de las 3 columnas.
+let selectedIndex = 0;
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -80,8 +86,10 @@ function cardHtml(order) {
     ? `<div class="delivery-driver-name">Repartidor: ${escapeHtml(order.driverName)}</div>`
     : '';
 
+  const isSelected = latestOrders[selectedIndex] && latestOrders[selectedIndex].id === order.id;
+
   return `
-    <div class="card ${overClass}" data-id="${order.id}">
+    <div class="card ${overClass} ${isSelected ? 'selected' : ''}" data-id="${order.id}">
       ${deliveryBadge}
       <div class="id">${escapeHtml(orderLabel(order))}</div>
       ${driverLine}
@@ -98,6 +106,10 @@ function renderColumn(elId, orders, emptyLabel) {
 }
 
 function render() {
+  // Si la orden seleccionada ya no está (se entregó, o la lista se achicó),
+  // no dejar el índice apuntando a nada.
+  if (selectedIndex >= latestOrders.length) selectedIndex = Math.max(0, latestOrders.length - 1);
+
   renderColumn('cards-nueva', latestOrders.filter((o) => o.kdsStatus === 'nueva'), 'Sin órdenes nuevas');
   renderColumn('cards-prep', latestOrders.filter((o) => o.kdsStatus === 'en_preparacion'), 'Nada en preparación');
   renderColumn('cards-lista', latestOrders.filter((o) => o.kdsStatus === 'lista'), 'Nada listo para entregar');
@@ -120,6 +132,37 @@ document.getElementById('app').addEventListener('click', (e) => {
     console.error('No se pudo actualizar la orden:', err);
     btn.disabled = false;
   });
+});
+
+// ==========================================================================
+// ATAJOS DE TECLADO -- la TV no tiene mouse a mano (ni teclado, casi
+// siempre), pero si alguien conecta uno para operar el KDS directo sin
+// pasar por el mapa de mesas, N mueve la selección (tarjeta resaltada, ver
+// .card.selected en kds.css) al siguiente pedido más urgente (latestOrders
+// ya viene ordenado por antigüedad), y R lo avanza un paso -- el mismo
+// botón que ya tiene esa tarjeta (COCINAR/LISTA/ENTREGAR según su estado
+// actual), sin duplicar esa lógica aquí.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    window.kdsAPI.exitFullscreen();
+    return;
+  }
+
+  if (e.key === 'n' || e.key === 'N') {
+    if (latestOrders.length === 0) return;
+    selectedIndex = (selectedIndex + 1) % latestOrders.length;
+    render();
+    return;
+  }
+
+  if (e.key === 'r' || e.key === 'R') {
+    const order = latestOrders[selectedIndex];
+    if (!order) return;
+    const actionKey = order.kdsStatus === 'nueva' ? 'cook' : order.kdsStatus === 'en_preparacion' ? 'ready' : 'deliver';
+    ACTION_CALL[actionKey](order.id).catch((err) => {
+      console.error('No se pudo avanzar la orden seleccionada con R:', err);
+    });
+  }
 });
 
 function updateClock() {

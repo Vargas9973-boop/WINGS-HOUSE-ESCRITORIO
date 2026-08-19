@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Notification, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, Menu, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -10,6 +10,7 @@ let mainWindow;
 let currentSession = null; // { id, username, displayName, role }
 const db = require('./db'); // capa de datos sobre Supabase
 const attendanceProvider = require('./attendanceProvider'); // lector de huella opcional
+const { handleShortcut } = require('./shortcuts'); // atajos de teclado del POS
 
 // ==========================================================================
 // KDS (Kitchen Display System) — segunda ventana para la TV de cocina por
@@ -292,21 +293,89 @@ function moveKdsToSecondDisplay() {
   kdsWindow.focus();
 }
 
+// Abre la ventana del KDS si está cerrada, o la enfoca si ya está abierta
+// (F3: "ir a cocina", nunca la cierra). Distinto de toggleKdsWindow (F8):
+// F3 siempre te deja viéndola, F8 la prende/apaga.
+function openOrFocusKdsWindow() {
+  if (kdsWindow && !kdsWindow.isDestroyed()) {
+    kdsWindow.focus();
+    return;
+  }
+  createKDSWindow();
+}
+
+// F8: enciende/apaga la TV de cocina con la misma tecla (antes solo la
+// abría -- si ya estaba abierta, F8 no hacía nada más que enfocarla).
+function toggleKdsWindow() {
+  if (kdsWindow && !kdsWindow.isDestroyed()) {
+    kdsWindow.close();
+  } else {
+    createKDSWindow();
+  }
+}
+
+// Único punto de entrada para las 7 teclas globales (F1,F2,F4,F5,F9 navegan
+// vía shortcuts.js; F3/F8 tocan la ventana del KDS, que vive aquí en
+// main.js, así que se le pasan como callbacks en vez de duplicar el estado
+// de kdsWindow dentro de shortcuts.js). Tanto el Menu como
+// registerGlobalShortcuts llaman esto mismo -- si algún día se disparan
+// los dos para la misma tecla (Menu accelerator + globalShortcut), lo peor
+// que pasa es navegar/refrescar/togglear dos veces seguidas, que es
+// inofensivo para estas acciones (no así para cobrar una venta, por eso
+// Alt+C NO es un atajo global -- ver common.js).
+function dispatchShortcut(key) {
+  handleShortcut(key, mainWindow, {
+    openOrFocusKds: openOrFocusKdsWindow,
+    toggleKds: toggleKdsWindow
+  });
+}
+
 function buildAppMenu() {
+  const isDev = !app.isPackaged;
   const template = [
     {
       label: 'Ver',
       submenu: [
-        { label: 'Abrir KDS en TV (F8)', accelerator: 'F8', click: () => createKDSWindow() },
-        { label: 'Mover KDS a TV (F9)', accelerator: 'F9', click: () => moveKdsToSecondDisplay() },
-        {
-          label: 'Cerrar KDS',
-          click: () => { if (kdsWindow && !kdsWindow.isDestroyed()) kdsWindow.close(); }
-        }
+        { label: 'Ayuda de atajos (F1)', accelerator: 'F1', click: () => dispatchShortcut('F1') },
+        { label: 'Nueva venta / Comandas (F2)', accelerator: 'F2', click: () => dispatchShortcut('F2') },
+        { label: 'Ir a Cocina / KDS (F3)', accelerator: 'F3', click: () => dispatchShortcut('F3') },
+        { label: 'Inventario (F4)', accelerator: 'F4', click: () => dispatchShortcut('F4') },
+        { label: 'Refrescar (F5)', accelerator: 'F5', click: () => dispatchShortcut('F5') },
+        { type: 'separator' },
+        { label: 'Mostrar/ocultar TV de cocina (F8)', accelerator: 'F8', click: () => dispatchShortcut('F8') },
+        // F9 antes movía el KDS a la segunda pantalla; ahora F9 es "Corte de
+        // caja" (pedido explícito, más usado en hora pico que reacomodar la
+        // TV). Esa acción sigue disponible por mouse aquí, solo sin atajo.
+        { label: 'Mover KDS a segunda pantalla', click: () => moveKdsToSecondDisplay() },
+        { label: 'Cerrar KDS', click: () => { if (kdsWindow && !kdsWindow.isDestroyed()) kdsWindow.close(); } },
+        { type: 'separator' },
+        { label: 'Corte de caja (F9)', accelerator: 'F9', click: () => dispatchShortcut('F9') },
+        ...(isDev ? [
+          { type: 'separator' },
+          {
+            label: 'DevTools (F12)',
+            accelerator: 'F12',
+            click: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.toggleDevTools(); }
+          }
+        ] : [])
       ]
     }
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// Atajos de SISTEMA (funcionan aunque la ventana no tenga el foco, ver
+// shortcuts.js para la razón de por qué solo estas 7 teclas y no
+// Ctrl+P/Ctrl+S/Ctrl+N/Ctrl+K/Alt+C/ESC). Se registran una sola vez en
+// whenReady() y se liberan en will-quit -- si algún día esto se llamara dos
+// veces por error, globalShortcut.register no truena (simplemente
+// reemplaza el registro anterior para esa tecla), así que no hay riesgo de
+// "already registered" como con ipcMain.handle.
+function registerGlobalShortcuts() {
+  ['F1', 'F2', 'F3', 'F4', 'F5', 'F8', 'F9'].forEach((accelerator) => {
+    const registered = globalShortcut.register(accelerator, () => dispatchShortcut(accelerator));
+    if (!registered) console.warn(`No se pudo registrar el atajo global ${accelerator} (¿ya lo usa otra app?).`);
+  });
 }
 
 app.whenReady().then(async () => {
@@ -323,6 +392,7 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   createWindow();
   buildAppMenu();
+  registerGlobalShortcuts();
 
   // Autoarranque del KDS en la TV: solo si esta PC lo tiene configurado
   // (kds-config.json, por defecto true) y de verdad hay una segunda
@@ -349,6 +419,13 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// Sin esto, los 7 atajos globales (F1,F2,F3,F4,F5,F8,F9) se quedan
+// registrados a nivel de SISTEMA OPERATIVO incluso después de cerrar Wings
+// House -- globalShortcut no se libera solo al cerrar la app.
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on('activate', () => {
@@ -542,6 +619,13 @@ function registerIpcHandlers() {
     // tocó el botón en la TV ve el cambio de inmediato.
     await refreshKdsWindow();
     return true;
+  });
+
+  // Esc en el KDS (ver kds-renderer.js): la ventana está en fullscreen
+  // nativo de Electron, no del DOM, así que solo el proceso principal puede
+  // quitarlo.
+  ipcMain.on('kds:exit-fullscreen', () => {
+    if (kdsWindow && !kdsWindow.isDestroyed()) kdsWindow.setFullScreen(false);
   });
 
   // ------------------------------------------------------------------

@@ -14,8 +14,11 @@ let selectedPayMethod = 'efectivo';
 let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
 
 // Semáforo de disponibilidad por producto a partir de recipes+inventory
-// (window.db.recipes.getAllWithStock). Copia de common.js: comandas.html no
-// incluye common.js.
+// (window.db.recipes.getAllWithStock). Copia de la versión en common.js:
+// esta se agregó antes de que comandas.html incluyera common.js (ahora sí
+// lo incluye, para los atajos de teclado -- ver el final de este archivo),
+// pero se deja así para no arriesgar el flujo de venta cambiando cuál de
+// las dos gana.
 function computeProductAvailability(recipesRaw) {
   const byProduct = {};
   (recipesRaw || []).forEach((r) => {
@@ -1540,6 +1543,9 @@ document
           'success'
         );
 
+        // Para Ctrl+P (reimprimir el último ticket) -- ver common.js.
+        window.__lastSaleId = result.id;
+
         alertLowStockInsumos();
         catalogLoaded = false; // fuerza a releer stock/receta en la próxima mesa
 
@@ -1768,3 +1774,31 @@ document.addEventListener(
 
   }
 );
+// ==========================================================================
+// ATAJOS DE TECLADO ESPECÍFICOS DE COMANDAS (Ctrl+K/Ctrl+N/Alt+C) -- el
+// resto (F1-F9, Ctrl+S, Esc) los maneja common.js de forma genérica; estos
+// tres necesitan saber en qué pantalla/estado está la comanda, que solo
+// vive aquí.
+window.addEventListener('app-shortcut', (e) => {
+  const insideOrder = orderScreen && orderScreen.style.display !== 'none';
+
+  if (e.detail === 'Ctrl+K') {
+    if (insideOrder) searchInput.focus();
+    return;
+  }
+
+  if (e.detail === 'Ctrl+N') {
+    // Solo tiene sentido "nuevo pedido" parado en el mapa de mesas; dentro
+    // de una comanda ya en curso, Ctrl+N no tiene una acción clara.
+    if (!insideOrder) document.getElementById('btn-new-takeout').click();
+    return;
+  }
+
+  if (e.detail === 'Alt+C') {
+    // Reusa el botón real (misma validación de "sin consumo registrado"
+    // que ya tiene su click handler) en vez de duplicar la lógica de cobro
+    // aquí -- Alt+C solo ABRE el modal de cobro, nunca confirma el pago
+    // por sí solo (eso lo sigue haciendo el cajero a mano, con el monto).
+    if (insideOrder) document.getElementById('btn-request-bill').click();
+  }
+});

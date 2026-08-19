@@ -9,7 +9,12 @@ async function call(channel, ...args) {
 }
 
 contextBridge.exposeInMainWorld('api', {
-  sendAction: (action) => ipcRenderer.send('send-action', action)
+  sendAction: (action) => ipcRenderer.send('send-action', action),
+  // F1 (mostrar ayuda) y F5 (refrescar) llegan por aquí -- son los únicos
+  // atajos globales (ver shortcuts.js) que necesitan que el renderer haga
+  // algo; el resto de F1-F9 solo navega (mainWindow.loadFile), que no
+  // necesita avisarle nada al renderer.
+  onShortcut: (cb) => ipcRenderer.on('shortcut', (event, key) => cb(key))
 });
 
 contextBridge.exposeInMainWorld('db', {

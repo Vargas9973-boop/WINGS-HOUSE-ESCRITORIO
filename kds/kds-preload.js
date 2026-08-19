@@ -17,5 +17,10 @@ contextBridge.exposeInMainWorld('kdsAPI', {
   onOnline: (cb) => ipcRenderer.on('kds:online', (event, online) => cb(online)),
   cook: (saleId) => call('kds:updateStatus', saleId, 'en_preparacion'),
   markReady: (saleId) => call('kds:updateStatus', saleId, 'lista'),
-  markDelivered: (saleId) => call('kds:updateStatus', saleId, 'entregada')
+  markDelivered: (saleId) => call('kds:updateStatus', saleId, 'entregada'),
+  // Esc: la ventana del KDS se pone en fullscreen nativo de Electron
+  // (kdsWindow.setFullScreen(true) en main.js), no fullscreen del DOM/CSS --
+  // el renderer no puede salir de eso por su cuenta, necesita pedírselo al
+  // proceso principal.
+  exitFullscreen: () => ipcRenderer.send('kds:exit-fullscreen')
 });

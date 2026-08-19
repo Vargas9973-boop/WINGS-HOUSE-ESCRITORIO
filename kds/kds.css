@@ -104,6 +104,11 @@ body {
 .card.over12 { border-color: #f59e0b; }
 .card.over18 { border-color: #ef4444; animation: pulse 1s infinite; }
 
+.card.selected {
+  outline: 3px solid #22d3ee;
+  outline-offset: 2px;
+}
+
 .card .delivery-badge {
   display: inline-block;
   background: #dc2626;

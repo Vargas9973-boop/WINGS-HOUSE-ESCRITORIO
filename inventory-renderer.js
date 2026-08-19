@@ -386,3 +386,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!session) return;
   init();
 });
+
+// Ctrl+N (ver common.js): "nuevo insumo" en este módulo.
+window.addEventListener('app-shortcut', (e) => {
+  if (e.detail === 'Ctrl+N') openItemModal();
+});
