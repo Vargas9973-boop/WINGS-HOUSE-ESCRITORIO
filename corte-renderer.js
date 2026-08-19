@@ -29,6 +29,12 @@ function fmtFechaLarga(fechaISO) {
   return d.toLocaleDateString('es-MX', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 }
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 function totalSalidas(salidasPorPago) {
   return (salidasPorPago.efectivo || 0) + (salidasPorPago.tarjeta || 0) + (salidasPorPago.transferencia || 0);
 }
@@ -47,8 +53,30 @@ async function loadCorte() {
 
   renderStatus();
   renderMovimientos();
+  renderDineroEnCalle();
   renderTicket();
   updateEditability();
+}
+
+// Aviso en pantalla (no en el ticket imprimible) de efectivo que ya se
+// cobró pero que todavía no regresa al local: no cuenta como faltante, pero
+// tampoco debe darse por sentado que ya está en el cajón. Es un snapshot en
+// vivo (getPendingDriverMoney no filtra por fecha), así que se muestra sin
+// importar qué día esté seleccionado arriba.
+function renderDineroEnCalle() {
+  const panel = document.getElementById('dinero-en-calle-panel');
+  const detalle = document.getElementById('dinero-en-calle-detalle');
+  const lista = corteData.dineroEnCalle || [];
+
+  if (lista.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = 'flex';
+  detalle.innerHTML = lista
+    .map((d) => `<div>${escapeHtml(d.driverName)}: ${d.pedidos} pedido(s) — ${fmtMoney(d.aRegresar)}</div>`)
+    .join('') + `<div style="margin-top:6px; font-weight:800;">Total en calle: ${fmtMoney(corteData.dineroEnCalleTotal || 0)}</div>`;
 }
 
 function renderStatus() {
@@ -163,6 +191,14 @@ function renderTicket() {
     <div class="ticket-row"><span>Efectivo neto</span><span>${fmtMoney(efectivoNeto)}</span></div>
     <div class="ticket-row"><span>Tarjeta neta</span><span>${fmtMoney(tarjetaNeta)}</span></div>
     <div class="ticket-row"><span>Transferencia neta</span><span>${fmtMoney(transferenciaNeta)}</span></div>
+
+    ${
+      d.dineroEnCalleTotal > 0
+        ? `
+    <div class="ticket-sep"></div>
+    <div class="ticket-row"><span>Dinero en calle (repartidores, no cuenta aquí)</span><span>${fmtMoney(d.dineroEnCalleTotal)}</span></div>`
+        : ''
+    }
 
     <div class="ticket-sep"></div>
     <div class="ticket-row total highlight"><span>Esperado en cajón</span><span>${fmtMoney(esperadoCajon)}</span></div>

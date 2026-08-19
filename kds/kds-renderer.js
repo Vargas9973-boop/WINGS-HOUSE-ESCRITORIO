@@ -10,6 +10,10 @@ function escapeHtml(str) {
   }[c]));
 }
 
+function fmt(n) {
+  return `$${(Number(n) || 0).toFixed(2)}`;
+}
+
 function fmtElapsed(ms) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
@@ -65,9 +69,22 @@ function cardHtml(order) {
       ? { cls: 'ready', label: 'LISTA' }
       : { cls: 'deliver', label: 'ENTREGAR' };
 
+  // Domicilio: badge grande para que cocina no lo confunda con un pedido
+  // normal para llevar. La cocina solo avanza kds_status (nueva ->
+  // en_preparacion -> lista); el dinero (payment_status) es cosa de caja,
+  // no del KDS.
+  const deliveryBadge = order.isDelivery
+    ? `<div class="delivery-badge">🛵 DOMICILIO ${fmt(order.total)}</div>`
+    : '';
+  const driverLine = order.isDelivery && order.driverName
+    ? `<div class="delivery-driver-name">Repartidor: ${escapeHtml(order.driverName)}</div>`
+    : '';
+
   return `
     <div class="card ${overClass}" data-id="${order.id}">
+      ${deliveryBadge}
       <div class="id">${escapeHtml(orderLabel(order))}</div>
+      ${driverLine}
       <div class="items">${itemsHtml}</div>
       <div class="timer">${fmtElapsed(elapsedMs)}</div>
       <button data-action="${action.cls}" data-id="${order.id}">${action.label}</button>

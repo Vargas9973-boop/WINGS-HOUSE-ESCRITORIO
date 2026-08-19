@@ -336,16 +336,44 @@ function deliveryStatusLabel(status) {
   }[status] || 'Pendiente';
 }
 
-// Solo avanza el estado (pendiente -> en_camino -> entregado); el resto de
-// los datos de domicilio (cliente, dirección, repartidor) se capturan una
-// sola vez desde la web al crear el pedido y aquí solo se muestran.
+// Copia local de la última carga: openAssignDriverModal la usa para
+// precargar el envío/total del pedido sin volver a pedirlo al abrir el modal.
+let latestTakeoutOrders = [];
+
+// Un domicilio tiene dos estados independientes:
+//   delivery_status -> dónde va el pedido (pendiente/en_camino/entregado)
+//   payment_status  -> dónde está el dinero (pendiente/dinero_con_repartidor/liquidado)
+// Antes de asignar repartidor (comandaAssignDriver, ver
+// migración 20260819050000) no se puede pasar a "en camino": el botón
+// "En camino" de antes se reemplaza por "Asignar repartidor y enviar", que
+// hace las dos cosas en una sola acción. El dinero solo pasa a estar "con el
+// repartidor" hasta que se marca Entregado (ahí es cuando de verdad cobra en
+// la puerta); mientras tanto solo se anuncia cuánto va a cobrar.
 function deliveryCardHtml(o) {
   const status = o.delivery_status || 'pendiente';
+  const hasDriver = !!o.driver_id;
+  const total = Number(o.total) || 0;
+  const fee = Number(o.delivery_fee) || 0;
+  const foodTotal = Math.max(total - fee, 0);
+
+  let moneyLine = '';
+  if (o.payment_status === 'dinero_con_repartidor') {
+    moneyLine = `<div class="delivery-money">💰 Cobró ${fmt(total)} — debe regresar ${fmt(foodTotal)} (liquidar en Ajustes → Repartidores)</div>`;
+  } else if (hasDriver && status !== 'entregado') {
+    moneyLine = `<div class="delivery-info delivery-pending-driver">Va a cobrar ${fmt(total)} en la puerta (envío ${fmt(fee)} para el repartidor)</div>`;
+  }
+
+  let actionsHtml = '';
+  if (!hasDriver) {
+    actionsHtml = `<button type="button" class="btn-delivery-status" data-action="assign-driver" data-sale-id="${o.id}">🛵 Asignar repartidor y enviar</button>`;
+  } else if (status !== 'entregado') {
+    actionsHtml = `<button type="button" class="btn-delivery-status" data-action="entregado" data-sale-id="${o.id}">✅ Marcó llegada - Entregada</button>`;
+  }
 
   return `
     <div class="table-card takeout-card delivery-card" data-sale-id="${o.id}">
       <h3>🛵 #${o.id}</h3>
-      <span class="status-label">${deliveryStatusLabel(status)}</span>
+      <span class="status-label">${hasDriver ? deliveryStatusLabel(status) : 'DOMICILIO - POR ASIGNAR'}</span>
       <div class="delivery-info">
         <div class="delivery-address">${escapeHtml(o.delivery_address || 'Sin dirección')}</div>
         ${o.customer_name ? `<div class="delivery-customer">${escapeHtml(o.customer_name)}</div>` : ''}
@@ -353,15 +381,9 @@ function deliveryCardHtml(o) {
           ${o.driver_name ? `Repartidor: ${escapeHtml(o.driver_name)}` : 'Sin repartidor asignado'}
         </div>
       </div>
+      ${moneyLine}
       <div class="table-total">${fmt(o.total)}</div>
-      <div class="delivery-actions">
-        ${status !== 'en_camino' && status !== 'entregado'
-          ? `<button type="button" class="btn-delivery-status" data-action="en_camino" data-sale-id="${o.id}">🛵 En camino</button>`
-          : ''}
-        ${status !== 'entregado'
-          ? `<button type="button" class="btn-delivery-status" data-action="entregado" data-sale-id="${o.id}">✅ Entregado</button>`
-          : ''}
-      </div>
+      <div class="delivery-actions">${actionsHtml}</div>
     </div>
   `;
 }
@@ -379,9 +401,103 @@ async function handleSetDeliveryStatus(saleId, status) {
   }
 }
 
+// ==========================================================================
+// ASIGNAR REPARTIDOR (domicilio) — modal
+// ==========================================================================
+const assignDriverModal = document.getElementById('assign-driver-modal');
+const assignDriverSelect = document.getElementById('assign-driver-select');
+const assignDriverFeeInput = document.getElementById('assign-driver-fee');
+const assignDriverBreakdown = document.getElementById('assign-driver-breakdown');
+let assignDriverSaleId = null;
+
+function renderAssignDriverBreakdown() {
+  const order = latestTakeoutOrders.find((o) => o.id === assignDriverSaleId);
+  if (!order || !assignDriverBreakdown) return;
+
+  const fee = Number(assignDriverFeeInput.value) || 0;
+  const existingTotal = Number(order.total) || 0;
+  const existingFee = Number(order.delivery_fee) || 0;
+  // El total del pedido ya puede traer un envío cargado desde la web
+  // (comanda_set_delivery); aquí solo se ajusta por la diferencia, igual
+  // que hace comanda_assign_driver en la base de datos.
+  const foodTotal = Math.max(existingTotal - existingFee, 0);
+  const newTotal = foodTotal + fee;
+
+  assignDriverBreakdown.innerHTML = `
+    <div class="breakdown-row"><span>Total comida</span><span>${fmt(foodTotal)}</span></div>
+    <div class="breakdown-row"><span>Envío</span><span>${fmt(fee)}</span></div>
+    <div class="breakdown-row highlight"><span>Total a cobrar en domicilio</span><span>${fmt(newTotal)}</span></div>
+    <div class="breakdown-row"><span>Repartidor se queda</span><span>${fmt(fee)}</span></div>
+    <div class="breakdown-row"><span>Debe regresar al local</span><span>${fmt(foodTotal)}</span></div>
+  `;
+}
+
+async function openAssignDriverModal(saleId) {
+  assignDriverSaleId = saleId;
+  const order = latestTakeoutOrders.find((o) => o.id === saleId);
+
+  assignDriverSelect.innerHTML = `<option value="">Cargando...</option>`;
+  assignDriverFeeInput.value = order && Number(order.delivery_fee) > 0 ? Number(order.delivery_fee).toFixed(2) : '40.00';
+
+  assignDriverModal.classList.add('show');
+
+  try {
+    const drivers = await window.driversAPI.getAll();
+    if (!drivers || drivers.length === 0) {
+      assignDriverSelect.innerHTML = `<option value="">Sin repartidores activos</option>`;
+    } else {
+      assignDriverSelect.innerHTML = drivers
+        .map((d) => `<option value="${d.id}">${escapeHtml(d.name)}</option>`)
+        .join('');
+    }
+  } catch (err) {
+    console.error('Error al cargar repartidores:', err);
+    assignDriverSelect.innerHTML = `<option value="">No se pudieron cargar</option>`;
+  }
+
+  renderAssignDriverBreakdown();
+}
+
+function closeAssignDriverModal() {
+  assignDriverModal.classList.remove('show');
+  assignDriverSaleId = null;
+}
+
+assignDriverFeeInput?.addEventListener('input', renderAssignDriverBreakdown);
+document.getElementById('btn-cancel-assign-driver')?.addEventListener('click', closeAssignDriverModal);
+
+document.getElementById('btn-confirm-assign-driver')?.addEventListener('click', async () => {
+  if (!assignDriverSaleId) return;
+  const driverId = assignDriverSelect.value;
+  if (!driverId) {
+    toast('Selecciona un repartidor.', 'error');
+    return;
+  }
+  const fee = Number(assignDriverFeeInput.value);
+  if (!Number.isFinite(fee) || fee < 0) {
+    toast('El envío debe ser un número válido.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-confirm-assign-driver');
+  btn.disabled = true;
+  try {
+    await window.comandasAPI.assignDriver(assignDriverSaleId, driverId, fee);
+    toast('Repartidor asignado, pedido enviado.', 'success');
+    closeAssignDriverModal();
+    await loadTakeoutOrders();
+  } catch (err) {
+    console.error('Error al asignar repartidor:', err);
+    toast(err && err.message ? err.message : 'No se pudo asignar el repartidor.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 async function loadTakeoutOrders() {
   try {
     const orders = await window.comandasAPI.getTakeoutOrders();
+    latestTakeoutOrders = orders || [];
 
     if (!takeoutGrid) return;
 
@@ -409,7 +525,12 @@ async function loadTakeoutOrders() {
     takeoutGrid.querySelectorAll('.btn-delivery-status').forEach((btn) => {
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        handleSetDeliveryStatus(Number(btn.dataset.saleId), btn.dataset.action);
+        const saleId = Number(btn.dataset.saleId);
+        if (btn.dataset.action === 'assign-driver') {
+          openAssignDriverModal(saleId);
+        } else {
+          handleSetDeliveryStatus(saleId, btn.dataset.action);
+        }
       });
     });
 

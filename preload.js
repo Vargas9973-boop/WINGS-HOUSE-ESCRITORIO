@@ -119,7 +119,16 @@ contextBridge.exposeInMainWorld('comandasAPI', {
   updateItemQty: (itemId, quantity) => call('comandas:updateItemQty', itemId, quantity),
   removeItem: (itemId) => call('comandas:removeItem', itemId),
   closeTable: (saleId, payload) => call('comandas:closeTable', saleId, payload),
-  cancelTable: (saleId) => call('comandas:cancelTable', saleId)
+  cancelTable: (saleId) => call('comandas:cancelTable', saleId),
+  assignDriver: (saleId, driverId, deliveryFee) => call('comandas:assignDriver', saleId, driverId, deliveryFee)
+});
+
+contextBridge.exposeInMainWorld('driversAPI', {
+  getAll: () => call('drivers:getAll'),
+  create: (name, phone) => call('drivers:create', name, phone),
+  getPendingMoney: () => call('drivers:getPendingMoney'),
+  liquidate: (driverId) => call('drivers:liquidate', driverId),
+  getSalesByPaymentStatus: (status) => call('drivers:getSalesByPaymentStatus', status)
 });
 
 contextBridge.exposeInMainWorld('orderAlertAPI', {

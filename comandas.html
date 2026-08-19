@@ -137,6 +137,26 @@
     </div>
   </div>
 
+  <!-- MODAL: ASIGNAR REPARTIDOR (domicilio) -->
+  <div id="assign-driver-modal" class="modal-overlay">
+    <div class="modal-content checkout-box">
+      <h2>Asignar repartidor</h2>
+      <div class="field">
+        <label for="assign-driver-select">Repartidor</label>
+        <select id="assign-driver-select"></select>
+      </div>
+      <div class="field">
+        <label for="assign-driver-fee">Envío</label>
+        <input type="number" id="assign-driver-fee" min="0" step="0.01">
+      </div>
+      <div id="assign-driver-breakdown" class="delivery-breakdown"></div>
+      <div class="modal-buttons">
+        <button id="btn-cancel-assign-driver" class="btn-secondary">Cancelar</button>
+        <button id="btn-confirm-assign-driver" class="btn-primary">Confirmar y enviar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="comandas-renderer.js"></script>
   <script src="order-alert.js"></script>
 </body>

@@ -364,10 +364,35 @@ function toCsv(headers, rows) {
   return '\uFEFF' + lines.join('\r\n'); // BOM para que Excel abra bien los acentos
 }
 
+// Sin esto, un fn() colgado (WiFi del negocio se cae a medias, DNS no
+// resuelve, lo que sea) nunca resuelve ni rechaza: supabase-js no trae
+// timeout por defecto en supabaseClient.js, así que el fetch se queda
+// esperando indefinidamente. Eso significa que el `await
+// window.db.inventory.create(...)` del renderer (p.ej.
+// inventory-renderer.js saveItem()) nunca vuelve, el botón "Guardar" se
+// queda disabled para siempre y no aparece ningún error -- desde el punto
+// de vista del usuario, la app se "congeló". Este era el único canal de
+// IPC del proyecto sin ese resguardo (imprimir ticket/reporte/historial ya
+// lo tenían, ver printFullReport/printHistoryReport/printTicket).
+// No cancela el fetch de verdad (supabase-js no expone AbortController
+// aquí) -- solo deja de esperarlo y le devuelve un error claro al
+// renderer para que el botón se reactive y el usuario pueda reintentar.
+const IPC_TIMEOUT_MS = 20000;
+
+function withTimeout(promise) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error('Tiempo de espera agotado. Revisa tu conexión a internet e intenta de nuevo.'));
+    }, IPC_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 function safeHandle(channel, fn) {
   ipcMain.handle(channel, async (event, ...args) => {
     try {
-      return { ok: true, data: await fn(...args) };
+      return { ok: true, data: await withTimeout(fn(...args)) };
     } catch (err) {
       console.error(`Error en ${channel}:`, err);
       return { ok: false, error: err.message || String(err) };
@@ -525,6 +550,16 @@ function registerIpcHandlers() {
   safeHandle('comandas:closeTable', (saleId, payload) =>
     db.comandaCloseTable(saleId, payload, currentSession ? currentSession.username : null, currentSession ? currentSession.id : null));
   safeHandle('comandas:cancelTable', (saleId) => db.comandaCancelTable(saleId));
+  safeHandle('comandas:assignDriver', (saleId, driverId, deliveryFee) => db.comandaAssignDriver(saleId, driverId, deliveryFee));
+
+  // ------------------------------------------------------------------
+  // REPARTIDORES / LIQUIDACIÓN DE DINERO EN CALLE
+  // ------------------------------------------------------------------
+  safeHandle('drivers:getAll', () => db.getDrivers());
+  safeHandle('drivers:create', (name, phone) => db.createDriver(name, phone));
+  safeHandle('drivers:getPendingMoney', () => db.getPendingDriverMoney());
+  safeHandle('drivers:liquidate', (driverId) => db.liquidateDriverSales(driverId));
+  safeHandle('drivers:getSalesByPaymentStatus', (status) => db.getSalesByPaymentStatus(status));
 
   // ------------------------------------------------------------------
   // INVENTARIOS
@@ -723,7 +758,7 @@ function registerIpcHandlers() {
     });
     if (result.canceled || !result.filePath) return { cancelled: true };
 
-    fs.writeFileSync(result.filePath, toCsv(headers, rows), 'utf8');
+    await fs.promises.writeFile(result.filePath, toCsv(headers, rows), 'utf8');
     return { cancelled: false, path: result.filePath };
   });
 
@@ -761,7 +796,7 @@ function registerIpcHandlers() {
     });
     if (result.canceled || !result.filePath) return { cancelled: true };
 
-    fs.writeFileSync(result.filePath, toCsv(headers, dataRows), 'utf8');
+    await fs.promises.writeFile(result.filePath, toCsv(headers, dataRows), 'utf8');
     return { cancelled: false, path: result.filePath };
   });
 

@@ -148,6 +148,36 @@
         </div>
       </div>
 
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Liquidación de repartidores</div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          Dinero que los repartidores ya cobraron en la puerta del cliente y todavía no regresan al local.
+          Se quedan con el envío; solo se liquida el importe de la comida.
+        </p>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr><th>Repartidor</th><th>Pedidos en calle</th><th>Total a regresar</th><th></th></tr>
+            </thead>
+            <tbody id="drivers-liquidation-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="form-grid" style="margin-top:18px;">
+          <div class="field">
+            <label>Nombre del nuevo repartidor</label>
+            <input type="text" id="new-driver-name" placeholder="Ej. Juan Pérez">
+          </div>
+          <div class="field">
+            <label>Teléfono (opcional)</label>
+            <input type="text" id="new-driver-phone">
+          </div>
+          <div class="field" style="align-self:end;">
+            <button id="btn-add-driver" type="button" class="btn btn-outline">+ Agregar repartidor</button>
+          </div>
+        </div>
+      </div>
+
       <div class="modal-actions" style="justify-content:flex-start; margin-top:22px;">
         <button id="btn-save-settings" class="btn btn-brand">Guardar ajustes</button>
       </div>

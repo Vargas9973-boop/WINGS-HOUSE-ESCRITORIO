@@ -104,6 +104,23 @@ body {
 .card.over12 { border-color: #f59e0b; }
 .card.over18 { border-color: #ef4444; animation: pulse 1s infinite; }
 
+.card .delivery-badge {
+  display: inline-block;
+  background: #dc2626;
+  color: #fff;
+  font-weight: 900;
+  font-size: clamp(13px, 1.3vw, 20px);
+  padding: 0.3vw 0.8vw;
+  border-radius: 0.4vw;
+  margin-bottom: 0.4vw;
+}
+
+.card .delivery-driver-name {
+  font-size: clamp(12px, 1.1vw, 16px);
+  opacity: 0.85;
+  margin-bottom: 0.3vw;
+}
+
 .card button {
   width: 100%;
   padding: 0.8vw;

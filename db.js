@@ -763,20 +763,128 @@ async function openTakeoutOrder(openedBy) {
 
 // Cambia solo el estado de entrega (pendiente -> en_camino -> entregado).
 // No toca driver_name ni el resto de los datos de domicilio: esos se
-// capturan una sola vez desde la web (comanda_set_delivery); el escritorio
-// solo los muestra y avanza el estado.
+// capturan una sola vez desde la web (comanda_set_delivery) o al asignar
+// repartidor desde el escritorio (comandaAssignDriver); esta función solo
+// avanza el estado.
 // Al llegar a 'entregado' también cierra la venta (status = 'completada'):
 // process_sale la insertó como 'abierta' para que fuera visible aquí
-// mientras iba en camino (ver 20260816010000_process_sale_delivery_open.sql),
-// y hasta este punto debe empezar a contar en reportes / corte de caja.
+// mientras iba en camino (ver 20260816010000_process_sale_delivery_open.sql).
+// payment_status pasa a 'dinero_con_repartidor' en ese mismo instante: es
+// cuando el repartidor cobra en la puerta del cliente (comida + envío), y el
+// dinero existe pero todavía está en la calle, no en el cajón. NUNCA debe
+// quedar en 'pagado_en_caja' aquí -- eso solo lo pone liquidateDriverSales
+// cuando el repartidor de verdad regresa el efectivo (ver getCorteResumen,
+// que excluye 'dinero_con_repartidor' del corte para no inflar el cajón).
 async function comandaSetDeliveryStatus(saleId, status) {
   if (status !== 'en_camino' && status !== 'entregado') {
     throw new Error(`Estado de entrega inválido: ${status}`);
   }
   const update = { delivery_status: status };
-  if (status === 'entregado') update.status = 'completada';
+  if (status === 'entregado') {
+    update.status = 'completada';
+    update.payment_status = 'dinero_con_repartidor';
+  }
   const { error } = await supabase.from('sales').update(update).eq('id', saleId);
   must(error, 'No se pudo actualizar el estado de entrega');
+  return true;
+}
+
+// Asigna un repartidor estructurado (tabla drivers) a un pedido a domicilio
+// y lo manda a "en camino" (comanda_assign_driver, SECURITY DEFINER: valida
+// que el pedido sea is_delivery y que no tenga repartidor ya asignado, y
+// ajusta el total solo por la diferencia del envío para no duplicar el
+// cobro si la web ya lo había cargado). No toca payment_status: el
+// repartidor sale con la comida, todavía no ha cobrado nada.
+async function comandaAssignDriver(saleId, driverId, deliveryFee) {
+  const { data, error } = await supabase.rpc('comanda_assign_driver', {
+    p_sale_id: saleId,
+    p_driver_id: driverId,
+    p_delivery_fee: Number(deliveryFee) || 0
+  });
+  must(error, 'No se pudo asignar el repartidor');
+  return data;
+}
+
+// Repartidores activos, para el selector de "Asignar repartidor" en Comandas
+// y el panel de liquidación en Ajustes.
+async function getDrivers() {
+  const { data, error } = await supabase
+    .from('drivers')
+    .select('*')
+    .eq('active', true)
+    .order('name');
+  must(error, 'No se pudieron obtener los repartidores');
+  return data || [];
+}
+
+async function createDriver(name, phone) {
+  const cleanName = String(name || '').trim();
+  if (!cleanName) throw new Error('El nombre del repartidor es obligatorio.');
+  const { data, error } = await supabase
+    .from('drivers')
+    .insert([{ name: cleanName, phone: phone || null }])
+    .select()
+    .single();
+  must(error, 'No se pudo crear el repartidor');
+  return data;
+}
+
+// Dinero que los repartidores traen en la calle en este momento: pedidos ya
+// entregados (el cliente ya pagó) pero que todavía no se liquidan en caja.
+// Se agrupa en JS (igual que getCorteResumen) porque supabase-js no hace
+// GROUP BY directo sin una vista o RPC aparte.
+async function getPendingDriverMoney() {
+  const { data, error } = await supabase
+    .from('sales')
+    .select('id, total, delivery_fee, driver_id, drivers(name)')
+    .eq('payment_status', 'dinero_con_repartidor')
+    .not('driver_id', 'is', null);
+  must(error, 'No se pudo obtener el dinero pendiente de repartidores');
+
+  const byDriver = {};
+  (data || []).forEach((s) => {
+    const total = Number(s.total) || 0;
+    const fee = Number(s.delivery_fee) || 0;
+    if (!byDriver[s.driver_id]) {
+      byDriver[s.driver_id] = {
+        driverId: s.driver_id,
+        driverName: s.drivers ? s.drivers.name : 'Repartidor',
+        pedidos: 0,
+        aRegresar: 0
+      };
+    }
+    byDriver[s.driver_id].pedidos += 1;
+    byDriver[s.driver_id].aRegresar += Math.max(total - fee, 0);
+  });
+
+  return Object.values(byDriver);
+}
+
+// Caja recibe el efectivo de la comida que trae el repartidor (liquidate_driver_sales,
+// SECURITY DEFINER: una sola sentencia UPDATE, atómica). El repartidor se
+// queda con el envío -- por eso el total liquidado es total - delivery_fee,
+// no el total completo.
+async function liquidateDriverSales(driverId) {
+  const { data, error } = await supabase.rpc('liquidate_driver_sales', { p_driver_id: driverId });
+  must(error, 'No se pudo liquidar al repartidor');
+  return data;
+}
+
+async function getSalesByPaymentStatus(status) {
+  const { data, error } = await supabase
+    .from('sales')
+    .select('*')
+    .eq('payment_status', status)
+    .order('created_at', { ascending: false });
+  must(error, 'No se pudieron obtener las ventas por estado de pago');
+  return data || [];
+}
+
+async function updateSalePaymentStatus(saleId, status) {
+  const VALID = ['pendiente', 'pagado_en_caja', 'dinero_con_repartidor', 'liquidado'];
+  if (!VALID.includes(status)) throw new Error(`Estado de pago inválido: ${status}`);
+  const { error } = await supabase.from('sales').update({ payment_status: status }).eq('id', saleId);
+  must(error, 'No se pudo actualizar el estado de pago');
   return true;
 }
 
@@ -878,7 +986,7 @@ const KDS_TIMESTAMP_COLUMN = {
 async function getKdsOrders() {
   const { data: sales, error } = await supabase
     .from('sales')
-    .select('id, table_number, client_type, folio, status, created_at, kds_status, kds_started_at, kds_ready_at')
+    .select('id, table_number, client_type, folio, status, created_at, kds_status, kds_started_at, kds_ready_at, is_delivery, delivery_fee, driver_name, total')
     .neq('kds_status', 'entregada')
     .neq('status', 'cancelada')
     .order('created_at', { ascending: true });
@@ -907,6 +1015,10 @@ async function getKdsOrders() {
     kdsStatus: s.kds_status,
     kdsStartedAt: s.kds_started_at,
     kdsReadyAt: s.kds_ready_at,
+    isDelivery: !!s.is_delivery,
+    deliveryFee: Number(s.delivery_fee) || 0,
+    driverName: s.driver_name || null,
+    total: Number(s.total) || 0,
     items: itemsBySale[s.id] || []
   }));
 }
@@ -1265,14 +1377,30 @@ async function getCorteResumen(fecha) {
   const fechaSig = d.toISOString().split('T')[0];
   const finUTC = `${fechaSig}T05:59:59.999Z`;
 
+  // payment_status IN ('pagado_en_caja', 'liquidado') es lo único que
+  // realmente está en el cajón. 'dinero_con_repartidor' se excluye a
+  // propósito: es un domicilio ya 'completada' (el cliente ya pagó) pero el
+  // repartidor todavía no regresa el efectivo al local -- sumarlo aquí
+  // infla "esperado en cajón" con dinero que físicamente no está.
+  // 'pendiente' no debería aparecer nunca en una venta 'completada' (ver
+  // comandaSetDeliveryStatus), pero se excluye igual por seguridad.
   const { data: sales, error: salesErr } = await supabase
    .from('sales')
-   .select('total, delivery_fee, payment_method, status, created_at, client_type, employee_benefit_before, employee_benefit_after')
+   .select('total, delivery_fee, payment_method, status, created_at, client_type, employee_benefit_before, employee_benefit_after, payment_status')
    .eq('status', 'completada')
+   .in('payment_status', ['pagado_en_caja', 'liquidado'])
    .eq('branch_id', getCurrentBranchId())
    .gte('created_at', inicioUTC)
    .lte('created_at', finUTC);
   must(salesErr, 'No se pudieron obtener las ventas del corte');
+
+  // Dinero en calle: snapshot en vivo (no se filtra por fecha) de lo que los
+  // repartidores traen consigo ahora mismo, sin liquidar. Un domicilio
+  // entregado el día del corte pero liquidado después seguiría faltando del
+  // "esperado en cajón" de ese día si esto se filtrara por fecha -- por eso
+  // se muestra aparte, como aviso, y no se suma a ventasPorPago.
+  const dineroEnCalle = await getPendingDriverMoney();
+  const dineroEnCalleTotal = dineroEnCalle.reduce((sum, d) => sum + d.aRegresar, 0);
 
   let ventaComida = 0;
   let ventaEnvios = 0;
@@ -1347,7 +1475,9 @@ async function getCorteResumen(fecha) {
     salidasPorPago,
     beneficioEmpleados,
     creditoNominaHoy,
-    movimientos: movimientos || []
+    movimientos: movimientos || [],
+    dineroEnCalle,
+    dineroEnCalleTotal
   };
 }
 // Crea/actualiza el fondo inicial del día (upsert por fecha+sucursal: el
@@ -2147,7 +2277,11 @@ async function getUnifiedHistory(filters = {}) {
       items,
       repartidor: s.is_delivery ? s.driver_name : null,
       direccion: s.is_delivery ? s.delivery_address : null,
-      telefono: s.is_delivery ? s.customer_phone : null
+      telefono: s.is_delivery ? s.customer_phone : null,
+      // Solo informativo aquí (el historial lista todo lo 'completada' sin
+      // importar si ya se liquidó); getCorteResumen es quien de verdad
+      // filtra por esto para el cajón.
+      paymentStatus: s.payment_status || null
     });
 
     const benefitUsed = s.client_type === 'employee'
@@ -2330,12 +2464,20 @@ module.exports = {
   getOpenTakeoutOrders,
   openTakeoutOrder,
   comandaSetDeliveryStatus,
+  comandaAssignDriver,
   getOpenSaleById,
   comandaAddItem,
   comandaUpdateItemQty,
   comandaRemoveItem,
   comandaCloseTable,
   comandaCancelTable,
+  // repartidores / liquidación
+  getDrivers,
+  createDriver,
+  getPendingDriverMoney,
+  liquidateDriverSales,
+  getSalesByPaymentStatus,
+  updateSalePaymentStatus,
   // kds
   getKdsOrders,
   updateKdsStatus,

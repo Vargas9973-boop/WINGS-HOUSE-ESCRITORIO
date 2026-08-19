@@ -158,3 +158,61 @@
 .btn-delivery-status:hover {
   filter: brightness(1.1);
 }
+
+.delivery-info .delivery-money {
+  font-weight: 700;
+  color: #ffb703;
+  margin-top: 2px;
+}
+
+.delivery-info .delivery-pending-driver {
+  color: var(--text-secondary, #9a8f85);
+}
+
+#assign-driver-modal .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+#assign-driver-modal .field label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary, #d8cfc5);
+}
+
+#assign-driver-modal .field select,
+#assign-driver-modal .field input {
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input, #1e1712);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.delivery-breakdown {
+  background: rgba(255, 183, 3, 0.08);
+  border: 1px solid rgba(255, 183, 3, 0.3);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.delivery-breakdown .breakdown-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.delivery-breakdown .breakdown-row.highlight {
+  font-weight: 800;
+  color: #ffb703;
+  border-top: 1px dashed rgba(255, 183, 3, 0.4);
+  padding-top: 4px;
+  margin-top: 2px;
+}

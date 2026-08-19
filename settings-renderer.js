@@ -169,7 +169,90 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
   }
 });
 
+// ==========================================================================
+// LIQUIDACIÓN DE REPARTIDORES — dinero que ya cobraron en la puerta del
+// cliente (payment_status = 'dinero_con_repartidor') y todavía no regresan
+// al local. Ver migración 20260819050000_delivery_payment_flow.sql: el
+// corte de caja (corte-renderer.js) excluye este dinero hasta que se
+// liquida aquí.
+// ==========================================================================
+async function loadDriversLiquidation() {
+  const tbody = document.getElementById('drivers-liquidation-tbody');
+  if (!tbody) return;
+  try {
+    const pending = await window.driversAPI.getPendingMoney();
+    if (!pending || pending.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">Sin dinero pendiente de repartidores.</div></td></tr>`;
+      return;
+    }
+    tbody.innerHTML = pending
+      .map(
+        (d) => `
+      <tr>
+        <td>${escapeHtmlSettings(d.driverName)}</td>
+        <td>${d.pedidos}</td>
+        <td>${fmtMoneySettings(d.aRegresar)}</td>
+        <td><button class="btn btn-brand btn-sm" data-liquidate="${d.driverId}" data-name="${escapeHtmlSettings(d.driverName)}" data-total="${d.aRegresar}">Liquidar todo</button></td>
+      </tr>`
+      )
+      .join('');
+
+    tbody.querySelectorAll('[data-liquidate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const driverId = btn.dataset.liquidate;
+        const name = btn.dataset.name;
+        const total = Number(btn.dataset.total) || 0;
+        if (!confirm(`¿Recibiste ${fmtMoneySettings(total)} de ${name}?`)) return;
+        btn.disabled = true;
+        try {
+          const result = await window.driversAPI.liquidate(driverId);
+          toast(`Liquidado: ${fmtMoneySettings(result.total)} de ${name}.`, 'success');
+          await loadDriversLiquidation();
+        } catch (err) {
+          console.error('No se pudo liquidar al repartidor:', err);
+          toast(err && err.message ? err.message : 'No se pudo liquidar al repartidor.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (err) {
+    console.error('No se pudo cargar la liquidación de repartidores:', err);
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">No se pudo cargar.</div></td></tr>`;
+  }
+}
+
+function escapeHtmlSettings(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function fmtMoneySettings(value) {
+  const n = Number(value) || 0;
+  return `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+document.getElementById('btn-add-driver')?.addEventListener('click', async () => {
+  const name = document.getElementById('new-driver-name').value.trim();
+  const phone = document.getElementById('new-driver-phone').value.trim();
+  if (!name) {
+    toast('El nombre del repartidor es obligatorio.', 'error');
+    return;
+  }
+  try {
+    await window.driversAPI.create(name, phone || null);
+    document.getElementById('new-driver-name').value = '';
+    document.getElementById('new-driver-phone').value = '';
+    toast('Repartidor agregado.', 'success');
+    await loadDriversLiquidation();
+  } catch (err) {
+    console.error('No se pudo agregar el repartidor:', err);
+    toast('No se pudo agregar el repartidor.', 'error');
+  }
+});
+
 document.addEventListener('DOMContentLoaded', () => {
   guardSession(['admin']);
   loadSettings();
+  loadDriversLiquidation();
 });
