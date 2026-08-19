@@ -1,17 +1,22 @@
 let employees = [];
 let todayRecords = [];
 let currentSessionRole = null;
+let biometricSettings = { enabled: false, model: 'u_are_u_4500' };
+let biometricConnected = false;
 
 // ---------------- TABS ----------------
 document.querySelectorAll('.tab-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     if (btn.classList.contains('admin-only') && currentSessionRole !== 'admin') return;
     document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     document.querySelectorAll('.tab-panel').forEach((p) => (p.style.display = 'none'));
     document.getElementById(`tab-${btn.dataset.tab}`).style.display = 'block';
-    if (btn.dataset.tab === 'employees') renderEmployeesTable();
-    if (btn.dataset.tab === 'payroll') loadPayrollWeek();
+    if (btn.dataset.tab === 'employees') {
+      await refreshBiometricStatus();
+      renderEmployeesTable();
+    }
+    if (btn.dataset.tab === 'punch') refreshBiometricStatus();
   });
 });
 
@@ -59,6 +64,47 @@ function renderPunchGrid() {
   );
 }
 
+// ---------------- BIOMETRÍA (lector de huella opcional) ----------------
+// Sondea Ajustes + hardware; si el lector no está habilitado o no se
+// detecta, deja la grilla de botones manuales exactamente como siempre.
+async function refreshBiometricStatus() {
+  const statusEl = document.getElementById('biometric-reader-status');
+  const scanArea = document.getElementById('biometric-scan-area');
+  const punchGrid = document.getElementById('employee-punch-grid');
+  const thHuella = document.getElementById('th-huella');
+
+  try {
+    biometricSettings = await window.biometricAPI.getSettings();
+  } catch (err) {
+    biometricSettings = { enabled: false, model: 'u_are_u_4500' };
+  }
+
+  if (thHuella) thHuella.style.display = biometricSettings.enabled ? '' : 'none';
+
+  let connected = false;
+  if (biometricSettings.enabled) {
+    try {
+      const result = await window.biometricAPI.scan(biometricSettings.model);
+      connected = !!(result && result.connected);
+    } catch (err) {
+      connected = false;
+    }
+  }
+  biometricConnected = connected;
+
+  if (connected) {
+    statusEl.className = 'status-indicator connected';
+    statusEl.textContent = '● Conectado';
+    scanArea.style.display = 'flex';
+    punchGrid.style.display = 'none';
+  } else {
+    statusEl.className = 'status-indicator disconnected';
+    statusEl.textContent = '○ No conectado - Usando modo manual';
+    scanArea.style.display = 'none';
+    punchGrid.style.display = 'grid';
+  }
+}
+
 async function registerPunch(employeeId) {
   try {
     const record = await window.db.attendance.register(employeeId);
@@ -92,9 +138,10 @@ function renderTodayTable() {
 function renderEmployeesTable() {
   const tbody = document.getElementById('employees-tbody');
   if (employees.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">Sin empleados registrados.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">Sin empleados registrados.</div></td></tr>`;
     return;
   }
+  const huellaDisplay = biometricSettings.enabled ? '' : 'display:none;';
   tbody.innerHTML = employees
     .map(
       (emp) => `
@@ -104,6 +151,11 @@ function renderEmployeesTable() {
       <td>${fmtMoney(emp.salary)}</td>
       <td>${fmtMoney(emp.weekly_bonus)}</td>
       <td><span class="tag ${emp.active ? 'active' : 'inactive'}">${emp.active ? 'Activo' : 'Inactivo'}</span></td>
+      <td class="td-huella" style="${huellaDisplay}">
+        ${emp.fingerprint_enrolled
+          ? '<span class="tag active">✓ Registrada</span>'
+          : `<button class="btn btn-outline btn-sm" data-enroll="${emp.id}">Registrar huella</button>`}
+      </td>
       <td>
         <button class="btn btn-outline btn-sm" data-edit="${emp.id}">Editar</button>
         <button class="btn btn-danger btn-sm" data-remove="${emp.id}">Eliminar</button>
@@ -115,6 +167,18 @@ function renderEmployeesTable() {
 
   tbody.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => openEmployeeModal(Number(b.dataset.edit))));
   tbody.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => removeEmployee(Number(b.dataset.remove))));
+  tbody.querySelectorAll('[data-enroll]').forEach((b) => b.addEventListener('click', () => enrollFingerprint(Number(b.dataset.enroll))));
+}
+
+async function enrollFingerprint(employeeId) {
+  try {
+    await window.biometricAPI.enroll(employeeId);
+    toast('Huella registrada.', 'success');
+    await loadData();
+    renderEmployeesTable();
+  } catch (err) {
+    toast(err?.message || 'No se pudo registrar la huella.', 'error');
+  }
 }
 
 function openEmployeeModal(id = null) {
@@ -190,116 +254,6 @@ async function removeEmployee(id) {
   }
 }
 
-// ---------------- NÓMINA SEMANAL ----------------
-function mondayOf(dateStr) {
-  const d = dateStr ? new Date(dateStr + 'T00:00:00') : new Date();
-  const day = d.getDay(); // 0=domingo
-  const diff = day === 0 ? -6 : 1 - day; // retrocede hasta el lunes
-  d.setDate(d.getDate() + diff);
-  return localISODate(d);
-}
-
-async function loadPayrollWeek() {
-  const picked = document.getElementById('week-picker').value;
-  const weekStart = mondayOf(picked);
-  document.getElementById('week-picker').value = weekStart;
-
-  const rows = await window.db.payroll.getWeek(weekStart);
-  renderPayrollKpis(rows);
-  renderPayrollTable(rows, weekStart);
-}
-
-function renderPayrollKpis(rows) {
-  const totalSalarios = rows.reduce((s, r) => s + r.salary, 0);
-  const totalBonos = rows.reduce((s, r) => s + (r.bonusCredited ? r.weeklyBonus : 0), 0);
-  const totalPagar = rows.reduce((s, r) => s + r.total, 0);
-
-  document.getElementById('payroll-kpis').innerHTML = `
-    <div class="kpi-card">
-      <div class="kpi-label">Salarios base</div>
-      <div class="kpi-value">${fmtMoney(totalSalarios)}</div>
-    </div>
-    <div class="kpi-card success">
-      <div class="kpi-label">Bonos acreditados</div>
-      <div class="kpi-value">${fmtMoney(totalBonos)}</div>
-    </div>
-    <div class="kpi-card warning">
-      <div class="kpi-label">Total a pagar esta semana</div>
-      <div class="kpi-value">${fmtMoney(totalPagar)}</div>
-    </div>
-  `;
-}
-
-function renderPayrollTable(rows, weekStart) {
-  const tbody = document.getElementById('payroll-tbody');
-  if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">No hay empleados activos.</div></td></tr>`;
-    return;
-  }
-  tbody.innerHTML = rows
-    .map(
-      (r) => `
-    <tr>
-      <td>${escapeHtml(r.employeeName)}</td>
-      <td>${escapeHtml(r.role)}</td>
-      <td>${fmtMoney(r.salary)}</td>
-      <td>${fmtMoney(r.weeklyBonus)}</td>
-      <td>
-        <select data-bonus="${r.employeeId}" class="bonus-select">
-          <option value="no" ${!r.bonusCredited ? 'selected' : ''}>No</option>
-          <option value="si" ${r.bonusCredited ? 'selected' : ''}>Sí</option>
-        </select>
-      </td>
-      <td>${fmtMoney(r.weeklyCreditAmount || 0)}</td>
-      <td>${fmtMoney(r.weeklyCashExtra || 0)}</td>
-      <td class="total-cell" data-total-for="${r.employeeId}">${fmtMoney(r.total)}</td>
-    </tr>
-  `
-    )
-    .join('');
-
-  tbody.querySelectorAll('.bonus-select').forEach((select) => {
-    select.addEventListener('change', async () => {
-      const employeeId = Number(select.dataset.bonus);
-      const credited = select.value === 'si';
-
-      select.disabled = true;
-
-      try {
-        await window.db.payroll.setBonus({
-          employeeId,
-          weekStart,
-          bonusCredited: credited
-        });
-
-        // Volvemos a consultar la semana completa para que salario, bono,
-        // crédito semanal y cantidad neta a pagar queden sincronizados.
-        const rows2 = await window.db.payroll.getWeek(weekStart);
-        renderPayrollKpis(rows2);
-        renderPayrollTable(rows2, weekStart);
-
-        toast('Nómina actualizada.', 'success');
-      } catch (err) {
-        console.log('====================================');
-  console.log('DEBUG NOMINA DESPUES DE GUARDAR BONO');
-  console.log('====================================');
-  console.log('SEMANA:', weekStart);
-  console.log('EMPLEADO:', employeeId);
-  console.log('ROWS2:', JSON.stringify(rows2, null, 2));
-
-        toast(
-          err?.message || 'No se pudo actualizar el bono.',
-          'error'
-        );
-      } finally {
-        select.disabled = false;
-      }
-    });
-  });
-}
-
-document.getElementById('btn-load-week').addEventListener('click', loadPayrollWeek);
-
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -313,6 +267,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (session.role !== 'admin') {
     document.querySelectorAll('.admin-only').forEach((el) => (el.style.display = 'none'));
   }
-  document.getElementById('week-picker').value = mondayOf();
   loadData();
+  refreshBiometricStatus();
+  // Sondeo periódico: detecta si el lector se conecta/desconecta mientras
+  // la pantalla sigue abierta, sin que el usuario tenga que recargar.
+  setInterval(refreshBiometricStatus, 8000);
 });

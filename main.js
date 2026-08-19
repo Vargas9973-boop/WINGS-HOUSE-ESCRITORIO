@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -9,6 +9,37 @@ log.transports.file.level = 'info';
 let mainWindow;
 let currentSession = null; // { id, username, displayName, role }
 const db = require('./db'); // capa de datos sobre Supabase
+const attendanceProvider = require('./attendanceProvider'); // lector de huella opcional
+
+// ==========================================================================
+// KDS (Kitchen Display System) — segunda ventana para la TV de cocina por
+// HDMI, ver kds/. Sin login: no pasa por login.html ni por currentSession.
+// ==========================================================================
+let kdsWindow = null;
+
+// Config LOCAL (por instalación/PC, no en Supabase): si esta PC en concreto
+// tiene la TV de cocina conectada, debe autoarrancar el KDS; otra
+// instalación del mismo negocio sin TV no debe. Por eso es un archivo en
+// userData y no una fila de la tabla `settings` (esa sí es por negocio).
+function getKdsConfigPath() {
+  return path.join(app.getPath('userData'), 'kds-config.json');
+}
+
+function readKdsConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(getKdsConfigPath(), 'utf8'));
+  } catch (err) {
+    return { kdsAutoStart: true }; // primer arranque: no existe el archivo todavía
+  }
+}
+
+function writeKdsConfig(cfg) {
+  try {
+    fs.writeFileSync(getKdsConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
+  } catch (err) {
+    console.error('No se pudo guardar kds-config.json:', err.message);
+  }
+}
 
 // ==========================================================================
 // ALERTA DE COCINA — comandas nuevas por Realtime (ver sección más abajo)
@@ -39,6 +70,9 @@ let isRealtimeConnected = false;
 function broadcastRealtimeStatus() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('order-alert:status', isRealtimeConnected);
+  }
+  if (kdsWindow && !kdsWindow.isDestroyed()) {
+    kdsWindow.webContents.send('kds:online', isRealtimeConnected);
   }
 }
 
@@ -136,6 +170,128 @@ function createWindow() {
   // mainWindow.webContents.openDevTools(); // Descomentar para depurar
 }
 
+// ==========================================================================
+// KDS — ventana, refresco y notificación "orden lista" hacia caja
+// ==========================================================================
+// Recuerda el último kds_status visto por orden para detectar la transición
+// exacta a 'lista' (y avisarle a caja una sola vez), no cada refresco.
+const lastKdsStatusById = new Map();
+
+function checkKdsReadyTransitions(orders) {
+  orders.forEach((o) => {
+    const prev = lastKdsStatusById.get(o.id);
+    if (prev !== 'lista' && o.kdsStatus === 'lista' && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('kds:ready', {
+        id: o.id,
+        tableNumber: o.tableNumber,
+        folio: o.folio,
+        clientType: o.clientType
+      });
+    }
+    lastKdsStatusById.set(o.id, o.kdsStatus);
+  });
+}
+
+async function refreshKdsWindow() {
+  if (!kdsWindow || kdsWindow.isDestroyed()) return;
+  try {
+    const orders = await db.getKdsOrders();
+    kdsWindow.webContents.send('kds:orders', orders);
+    checkKdsReadyTransitions(orders);
+  } catch (err) {
+    console.error('No se pudo refrescar el KDS:', err.message);
+  }
+}
+
+// Crea (o enfoca, si ya existe) la ventana de la TV de cocina. `screen` se
+// requiere aquí adentro -- nunca al inicio del archivo -- porque la API de
+// pantallas de Electron solo es válida después de que la app está 'ready';
+// esta función nunca se llama antes (menú, atajo F8 y autoarranque corren
+// todos dentro/después de app.whenReady()).
+function createKDSWindow() {
+  if (kdsWindow && !kdsWindow.isDestroyed()) {
+    kdsWindow.focus();
+    return kdsWindow;
+  }
+
+  const { screen } = require('electron');
+  const displays = screen.getAllDisplays();
+  const target = displays[1] || displays[0];
+  const isSecondScreen = displays.length > 1;
+
+  kdsWindow = new BrowserWindow({
+    x: target.bounds.x + 20,
+    y: target.bounds.y + 20,
+    width: isSecondScreen ? target.bounds.width : 1280,
+    height: isSecondScreen ? target.bounds.height : 720,
+    fullscreen: isSecondScreen,
+    fullscreenable: true,
+    autoHideMenuBar: true,
+    alwaysOnTop: false,
+    kiosk: false,
+    title: 'KDS COCINA',
+    backgroundColor: '#111111',
+    icon: path.join(__dirname, 'build/icon.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, 'kds', 'kds-preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  kdsWindow.setMenuBarVisibility(false);
+  kdsWindow.loadFile('kds/kds.html');
+  kdsWindow.webContents.on('did-finish-load', () => {
+    refreshKdsWindow();
+    kdsWindow.webContents.send('kds:online', isRealtimeConnected);
+  });
+  kdsWindow.on('closed', () => { kdsWindow = null; });
+
+  return kdsWindow;
+}
+
+// Reubica el KDS ya abierto en la segunda pantalla (útil si la TV se conectó
+// después de abrir el KDS en la pantalla principal). Si no hay una segunda
+// pantalla conectada, avisa en vez de mover la ventana a ciegas.
+function moveKdsToSecondDisplay() {
+  const { screen } = require('electron');
+  const displays = screen.getAllDisplays();
+  if (displays.length < 2) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'KDS',
+      message: 'No se detecta una segunda pantalla/TV conectada.'
+    });
+    return;
+  }
+  if (!kdsWindow || kdsWindow.isDestroyed()) {
+    createKDSWindow();
+    return;
+  }
+  const target = displays[1];
+  kdsWindow.setFullScreen(false);
+  kdsWindow.setBounds({ x: target.bounds.x, y: target.bounds.y, width: target.bounds.width, height: target.bounds.height });
+  kdsWindow.setFullScreen(true);
+  kdsWindow.focus();
+}
+
+function buildAppMenu() {
+  const template = [
+    {
+      label: 'Ver',
+      submenu: [
+        { label: 'Abrir KDS en TV (F8)', accelerator: 'F8', click: () => createKDSWindow() },
+        { label: 'Mover KDS a TV (F9)', accelerator: 'F9', click: () => moveKdsToSecondDisplay() },
+        {
+          label: 'Cerrar KDS',
+          click: () => { if (kdsWindow && !kdsWindow.isDestroyed()) kdsWindow.close(); }
+        }
+      ]
+    }
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(async () => {
   try {
     await db.init(); // siembra las cuentas por defecto en Supabase si hace falta
@@ -146,8 +302,19 @@ app.whenReady().then(async () => {
     isRealtimeConnected = connected;
     broadcastRealtimeStatus();
   });
+  db.subscribeToKdsChanges(() => refreshKdsWindow());
   registerIpcHandlers();
   createWindow();
+  buildAppMenu();
+
+  // Autoarranque del KDS en la TV: solo si esta PC lo tiene configurado
+  // (kds-config.json, por defecto true) y de verdad hay una segunda
+  // pantalla conectada -- si no, no tiene sentido abrir una ventana extra
+  // encima de la principal.
+  const { screen } = require('electron');
+  if (readKdsConfig().kdsAutoStart === true && screen.getAllDisplays().length > 1) {
+    createKDSWindow();
+  }
 
   autoUpdater.checkForUpdatesAndNotify();
 
@@ -324,6 +491,17 @@ function registerIpcHandlers() {
   ipcMain.on('order-alert:fallback-sale', (event, row) => handleIncomingSale(row, true));
 
   // ------------------------------------------------------------------
+  // KDS (pantalla de cocina — segunda ventana/TV, ver kds/)
+  // ------------------------------------------------------------------
+  safeHandle('kds:updateStatus', async (saleId, status) => {
+    await db.updateKdsStatus(saleId, status);
+    // No espera al viaje de ida y vuelta de Realtime para reflejarlo: quien
+    // tocó el botón en la TV ve el cambio de inmediato.
+    await refreshKdsWindow();
+    return true;
+  });
+
+  // ------------------------------------------------------------------
   // COMANDAS (control de consumo por mesa)
   // ------------------------------------------------------------------
   safeHandle('comandas:getTables', () => db.getTables());
@@ -352,9 +530,25 @@ function registerIpcHandlers() {
   // INVENTARIOS
   // ------------------------------------------------------------------
   safeHandle('inventory:getAll', () => db.getAllInventory());
-  safeHandle('inventory:create', (data) => db.createInventoryItem(data));
-  safeHandle('inventory:update', (id, data) => db.updateInventoryItem(id, data));
+  safeHandle('inventory:create', (data) =>
+    db.createInventoryItem(data, currentSession ? currentSession.username : null));
+  safeHandle('inventory:update', (id, data) =>
+    db.updateInventoryItem(id, data, currentSession ? currentSession.username : null));
   safeHandle('inventory:remove', (id) => db.removeInventoryItem(id));
+  safeHandle('inventory:addStock', (id, data) =>
+    db.addInventoryStock(id, data, currentSession ? currentSession.username : null));
+  safeHandle('inventory:getMovements', (id) => db.getInventoryMovements(id));
+  safeHandle('inventory:checkLowStock', () => db.checkLowStockInventory());
+
+  // ------------------------------------------------------------------
+  // RECETAS (producto -> insumos que consume)
+  // ------------------------------------------------------------------
+  safeHandle('recipes:getForProduct', (productId) => db.getRecipesForProduct(productId));
+  safeHandle('recipes:setForProduct', (productId, rows) => db.setRecipesForProduct(productId, rows));
+  safeHandle('recipes:getCost', (productId) => db.getRecipeCost(productId));
+  safeHandle('recipes:getProductIdsWithRecipe', () => db.getProductIdsWithRecipe());
+  safeHandle('recipes:getAllCosts', () => db.getAllRecipeCosts());
+  safeHandle('recipes:getAllWithStock', () => db.getAllRecipesWithStock());
 
   // ------------------------------------------------------------------
   // MERMA
@@ -413,6 +607,53 @@ function registerIpcHandlers() {
   safeHandle('attendance:register', (employeeId) => db.registerAttendance(employeeId));
 
   // ------------------------------------------------------------------
+  // BIOMETRÍA (lector de huella opcional; ver attendanceProvider.js)
+  // ------------------------------------------------------------------
+  safeHandle('biometric:getSettings', () => db.getBiometricSettings());
+
+  // Sondeo de hardware: intenta detectar el lector por HID. Nunca rechaza
+  // la promesa -- si algo falla (SDK no instalado, sin permisos, sin
+  // lector), resuelve {connected:false} para que el renderer no necesite
+  // manejar un error especial y el modo manual siga siendo el camino feliz.
+  safeHandle('biometric-scan', async (model) => {
+    try {
+      const settings = model ? { model } : await db.getBiometricSettings();
+      const device = attendanceProvider.findConnectedDevice(settings.model);
+      if (!device) return { connected: false };
+      return {
+        connected: true,
+        model: settings.model,
+        deviceInfo: {
+          vendorId: device.vendorId,
+          productId: device.productId,
+          product: device.product || null,
+          manufacturer: device.manufacturer || null
+        }
+      };
+    } catch (err) {
+      console.warn('[biometric-scan] fallo al sondear el lector:', err.message);
+      return { connected: false };
+    }
+  });
+
+  safeHandle('biometric:enroll', async (employeeId) => {
+    const settings = await db.getBiometricSettings();
+    const provider = attendanceProvider.getAttendanceProvider(db, settings);
+    // Cuando el SDK del fabricante esté integrado, enrollFingerprint()
+    // devolverá la plantilla capturada y aquí se persiste; hoy siempre
+    // rechaza con un mensaje claro (ver attendanceProvider.js).
+    const template = await provider.enrollFingerprint(employeeId);
+    await db.saveFingerprint(employeeId, template);
+    return { enrolled: true };
+  });
+
+  safeHandle('biometric:identify', async () => {
+    const settings = await db.getBiometricSettings();
+    const provider = attendanceProvider.getAttendanceProvider(db, settings);
+    return provider.identify();
+  });
+
+  // ------------------------------------------------------------------
   // NÓMINA SEMANAL (salario + bono acreditable por semana)
   // ------------------------------------------------------------------
   safeHandle('payroll:getWeek', (weekStart) => db.getPayrollWeek(weekStart));
@@ -426,6 +667,7 @@ function registerIpcHandlers() {
   safeHandle('payroll:getSettings', () => db.getPayrollSettings());
   safeHandle('payroll:getWeekRange', (paydayNumber, referenceDate) => db.getWeekRange(paydayNumber, referenceDate));
   safeHandle('payroll:getData', (weekStart, weekEnd) => db.getPayrollData(weekStart, weekEnd));
+  safeHandle('payroll:saveBono', (employeeId, weekEnd, acredita) => db.saveBonoAcreditacion(employeeId, weekEnd, acredita));
   safeHandle('payroll:getDetail', (employeeName, weekStart, weekEnd) => db.getPayrollDetail(employeeName, weekStart, weekEnd));
   safeHandle('payroll:close', (weekStart, weekEnd) =>
     db.closePayrollWeek(weekStart, weekEnd, currentSession ? currentSession.username : null));
@@ -501,10 +743,15 @@ function registerIpcHandlers() {
 
   safeHandle('history:exportCsv', async (filters = {}) => {
     const { rows } = await db.getUnifiedHistory(filters);
-    const headers = ['Fecha', 'Tipo', 'Detalle', 'Total', 'Método', 'Autorizó / Cliente', 'Folio'];
-    const dataRows = rows.map((r) => [
-      r.fecha, HISTORY_TIPO_LABELS[r.tipo] || r.tipo, r.detalle, money(r.total), r.metodoLabel, r.autorizoCliente, r.folio || ''
-    ]);
+    const headers = ['Fecha', 'Tipo', 'Detalle', 'Productos (cant x nombre @ subtotal)', 'Total', 'Método', 'Autorizó / Cliente', 'Folio'];
+    const dataRows = rows.map((r) => {
+      const productos = (r.items || [])
+        .map((it) => `${it.quantity}x ${it.name} @ ${money(it.subtotal)}`)
+        .join(' | ');
+      return [
+        r.fecha, HISTORY_TIPO_LABELS[r.tipo] || r.tipo, r.detalle, productos, money(r.total), r.metodoLabel, r.autorizoCliente, r.folio || ''
+      ];
+    });
     const defaultName = `historial_${filters.startDate || 'inicio'}_a_${filters.endDate || 'hoy'}.csv`;
 
     const result = await dialog.showSaveDialog(mainWindow, {

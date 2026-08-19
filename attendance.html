@@ -16,7 +16,7 @@
         <img src="logo.png" alt="Wings House" class="header-logo">
         <div class="module-title">
           <h1>Asistencia</h1>
-          <span>Registro de horarios, empleados y nómina semanal con descuento de crédito semanal</span>
+          <span>Registro de horarios y empleados</span>
         </div>
       </div>
     </header>
@@ -25,12 +25,24 @@
       <div class="tabs-bar">
         <button class="tab-btn active" data-tab="punch">Registrar asistencia</button>
         <button class="tab-btn admin-only" data-tab="employees">Empleados</button>
-        <button class="tab-btn admin-only" data-tab="payroll">Nómina semanal</button>
       </div>
 
       <!-- TAB: REGISTRAR ASISTENCIA -->
       <section id="tab-punch" class="tab-panel">
-        <div class="section-toolbar"><h2>Registrar entrada / salida</h2></div>
+        <div class="section-toolbar">
+          <h2>Registrar entrada / salida</h2>
+          <span id="biometric-reader-status" class="status-indicator disconnected">○ No conectado - Usando modo manual</span>
+        </div>
+
+        <div id="biometric-scan-area" class="biometric-scan-area" style="display:none;">
+          <div class="fingerprint-pulse">
+            <div class="fingerprint-ring"></div>
+            <div class="fingerprint-ring delay"></div>
+            <span class="fingerprint-icon">👆</span>
+          </div>
+          <p>Coloque su dedo en el lector...</p>
+        </div>
+
         <div id="employee-punch-grid" class="punch-grid"></div>
 
         <div class="section-toolbar" style="margin-top:30px;"><h2>Movimientos de hoy</h2></div>
@@ -51,33 +63,9 @@
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th>Nombre</th><th>Puesto</th><th>Salario semanal</th><th>Bono semanal</th><th>Estado</th><th></th></tr>
+              <tr><th>Nombre</th><th>Puesto</th><th>Salario semanal</th><th>Bono semanal</th><th>Estado</th><th id="th-huella" style="display:none;">Huella</th><th></th></tr>
             </thead>
             <tbody id="employees-tbody"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- TAB: NÓMINA SEMANAL (admin) -->
-      <section id="tab-payroll" class="tab-panel" style="display:none;">
-        <div class="section-toolbar">
-          <h2>Nómina de la semana</h2>
-          <div class="field-row">
-            <input type="date" id="week-picker">
-            <button id="btn-load-week" class="btn btn-outline btn-sm">Cargar semana</button>
-          </div>
-        </div>
-        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
-          Selecciona cualquier día de la semana a pagar. Marca "Sí" en cada empleado que acreditó su bono esta semana;
-          el total se calcula automáticamente (salario + bono si aplica).
-        </p>
-        <div id="payroll-kpis" class="kpi-grid"></div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr><th>Empleado</th><th>Puesto</th><th>Salario</th><th>Bono semanal</th><th>¿Acredita bono?</th><th>Crédito semanal (excedente)</th><th>Efectivo excedente cobrado</th><th>Total a pagar</th></tr>
-            </thead>
-            <tbody id="payroll-tbody"></tbody>
           </table>
         </div>
       </section>

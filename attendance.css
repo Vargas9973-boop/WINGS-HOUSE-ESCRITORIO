@@ -34,3 +34,52 @@
 .punch-card button {
   width: 100%;
 }
+
+.biometric-scan-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 16px;
+  margin-bottom: 20px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.biometric-scan-area p {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.fingerprint-pulse {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fingerprint-icon {
+  font-size: 2rem;
+  z-index: 1;
+}
+
+.fingerprint-ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--brand-orange);
+  border-radius: 50%;
+  animation: fingerprint-pulse 1.6s ease-out infinite;
+}
+
+.fingerprint-ring.delay {
+  animation-delay: 0.8s;
+}
+
+@keyframes fingerprint-pulse {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(1.6); opacity: 0; }
+}

@@ -114,3 +114,77 @@ function renderUserBadge(session) {
     goTo('open-login');
   });
 }
+
+// ==========================================================================
+// CONVERSIÓN DE UNIDADES (masa/volumen) -- ver public.convert_unit() en
+// supabase/migrations/20260818030000_unit_conversion.sql, misma tabla.
+// ==========================================================================
+// La receta de un producto SIEMPRE guarda quantity_needed en la unidad
+// propia del insumo (catalog-renderer.js no deja elegir otra), así que hoy
+// nada llama a esto todavía -- queda listo por si en el futuro se necesita
+// comparar/convertir entre unidades (p.ej. receta capturada en kg contra un
+// insumo llevado en g). Unidades no convertibles entre sí (pz/orden/porción,
+// o mezclar masa con volumen) regresan null: ahí el llamador debe bloquear
+// con un mensaje explícito en vez de adivinar una conversión.
+const UNIT_CONVERSIONS = {
+  kg: { g: 1000, mg: 1000000 },
+  g: { kg: 0.001, mg: 1000 },
+  mg: { kg: 0.000001, g: 0.001 },
+  L: { ml: 1000 },
+  ml: { L: 0.001 }
+};
+
+function convertUnit(qty, fromUnit, toUnit) {
+  const from = (fromUnit || '').trim();
+  const to = (toUnit || '').trim();
+  if (from === to) return Number(qty) || 0;
+  const factor = (UNIT_CONVERSIONS[from] || {})[to];
+  if (factor == null) return null;
+  return (Number(qty) || 0) * factor;
+}
+
+// ==========================================================================
+// DISPONIBILIDAD DE PRODUCTOS SEGÚN RECETA (catálogo -> inventario)
+// ==========================================================================
+// A partir de window.db.recipes.getAllWithStock() (product_id, quantity_needed,
+// inventory:{id,name,unit,stock,min_stock}), calcula el semáforo por producto:
+//   - rojo: al menos un insumo no alcanza para 1 venta más.
+//   - amarillo: alcanza, pero algún insumo ya está en su mínimo o por debajo.
+//   - verde: receta completa con stock por encima del mínimo.
+// Un producto sin filas de receta no aparece en el resultado (se trata como
+// "sin receta" en el llamador -- no bloquea, es el flujo legacy).
+function computeProductAvailability(recipesRaw) {
+  const byProduct = {};
+  (recipesRaw || []).forEach((r) => {
+    const inv = r.inventory;
+    if (!inv) return;
+    if (!byProduct[r.product_id]) byProduct[r.product_id] = [];
+    byProduct[r.product_id].push({
+      insumoId: inv.id,
+      name: inv.name,
+      unit: inv.unit,
+      stock: Number(inv.stock) || 0,
+      minStock: Number(inv.min_stock) || 0,
+      needed: Number(r.quantity_needed) || 0
+    });
+  });
+
+  const result = {};
+  Object.keys(byProduct).forEach((pid) => {
+    const rows = byProduct[pid];
+    let status = 'verde';
+    let shortInsumo = null;
+    let maxSellable = Infinity;
+    rows.forEach((row) => {
+      if (row.needed > 0) maxSellable = Math.min(maxSellable, Math.floor(row.stock / row.needed));
+      if (row.stock < row.needed) {
+        status = 'rojo';
+        if (!shortInsumo) shortInsumo = row;
+      } else if (status !== 'rojo' && row.stock <= row.minStock) {
+        status = 'amarillo';
+      }
+    });
+    result[pid] = { status, shortInsumo, maxSellable: maxSellable === Infinity ? null : maxSellable, insumos: rows };
+  });
+  return result;
+}

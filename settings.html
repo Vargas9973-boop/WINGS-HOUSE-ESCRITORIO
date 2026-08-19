@@ -15,7 +15,7 @@
         <img src="logo.png" alt="Wings House" class="header-logo">
         <div class="module-title">
           <h1>Ajustes</h1>
-          <span>Negocio, descuentos e impresora de tickets</span>
+          <span>Negocio, descuentos, impresora de tickets y biometría</span>
         </div>
       </div>
     </header>
@@ -99,6 +99,34 @@
               <option value="6">Sábado</option>
               <option value="0">Domingo</option>
             </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Asistencia / Biometría (lector de huella)</div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          Si no hay lector conectado, el sistema sigue en registro manual.
+        </p>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1; display:flex; align-items:center; gap:10px;">
+            <input type="checkbox" id="set-biometric-enabled" style="width:auto;">
+            <label for="set-biometric-enabled" style="margin:0;">Habilitar lector de huella biométrico</label>
+          </div>
+          <div class="field">
+            <label>Modelo</label>
+            <select id="set-biometric-model">
+              <option value="u_are_u_4500">DigitalPersona U.are.U 4500</option>
+              <option value="zk4500">ZKTeco ZK4500</option>
+              <option value="hamster_pro">SecuGen Hamster Pro</option>
+              <option value="generico">Genérico</option>
+            </select>
+          </div>
+          <div class="field" style="align-self:end;">
+            <button id="btn-test-biometric" type="button" class="btn btn-outline">Probar conexión lector</button>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <span id="biometric-test-result" class="status-indicator"></span>
           </div>
         </div>
       </div>

@@ -25,8 +25,45 @@ async function loadSettings() {
 
   await loadPrinters(settings.printer_name || '');
 
+  let biometric = { enabled: false, model: 'u_are_u_4500' };
+  if (settings.biometric_enabled) {
+    try {
+      const parsed = JSON.parse(settings.biometric_enabled);
+      biometric.enabled = !!parsed.enabled;
+      if (parsed.model) biometric.model = parsed.model;
+    } catch {
+      // valor legado/corrupto: se deja el default (deshabilitado)
+    }
+  }
+  document.getElementById('set-biometric-enabled').checked = biometric.enabled;
+  document.getElementById('set-biometric-model').value = biometric.model;
+
   loadAlertPrefs();
 }
+
+// ==========================================================================
+// BIOMETRÍA — lector de huella opcional (Asistencia). "Probar conexión" solo
+// sondea el hardware por HID; no depende de que el toggle esté guardado.
+// ==========================================================================
+document.getElementById('btn-test-biometric').addEventListener('click', async () => {
+  const model = document.getElementById('set-biometric-model').value;
+  const resultEl = document.getElementById('biometric-test-result');
+  resultEl.className = 'status-indicator';
+  resultEl.textContent = 'Probando...';
+  try {
+    const result = await window.biometricAPI.scan(model);
+    if (result && result.connected) {
+      resultEl.className = 'status-indicator connected';
+      resultEl.textContent = `● Lector detectado${result.deviceInfo?.product ? ` (${result.deviceInfo.product})` : ''}.`;
+    } else {
+      resultEl.className = 'status-indicator disconnected';
+      resultEl.textContent = '○ No se detectó el lector. El sistema sigue en registro manual.';
+    }
+  } catch (err) {
+    resultEl.className = 'status-indicator error';
+    resultEl.textContent = 'No se pudo probar la conexión.';
+  }
+});
 
 // ==========================================================================
 // ALERTA DE SONIDO — preferencia local (localStorage), no viaja a Supabase:
@@ -109,7 +146,11 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     printer_name: document.getElementById('set-printer-name').value,
     ticket_width: document.getElementById('set-ticket-width').value,
     printer_enabled: document.getElementById('set-printer-enabled').checked ? 'true' : 'false',
-    payroll_payday: JSON.stringify({ day: PAYROLL_DAY_NAMES[paydayNumber], day_number: paydayNumber })
+    payroll_payday: JSON.stringify({ day: PAYROLL_DAY_NAMES[paydayNumber], day_number: paydayNumber }),
+    biometric_enabled: JSON.stringify({
+      enabled: document.getElementById('set-biometric-enabled').checked,
+      model: document.getElementById('set-biometric-model').value
+    })
   };
 
   try {

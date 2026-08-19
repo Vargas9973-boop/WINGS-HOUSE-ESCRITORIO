@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wings House - Catálogo</title>
   <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="catalog.css">
 </head>
 <body>
   <div class="module-shell">
@@ -30,7 +31,13 @@
       <section id="tab-products" class="tab-panel">
         <div class="section-toolbar">
           <h2>Productos del menú</h2>
-          <button id="btn-new-product" class="btn btn-brand">+ Nuevo producto</button>
+          <div style="display:flex; align-items:center; gap:14px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:0.82rem; color:var(--text-muted); cursor:pointer;">
+              <input type="checkbox" id="chk-only-missing-recipe">
+              Solo sin receta (migrar)
+            </label>
+            <button id="btn-new-product" class="btn btn-brand">+ Nuevo producto</button>
+          </div>
         </div>
         <div class="table-wrap">
           <table class="data-table">
@@ -41,6 +48,7 @@
                 <th>Precio público</th>
                 <th>Precio empleado</th>
                 <th>Existencia</th>
+                <th>Disponible</th>
                 <th>Estado</th>
                 <th></th>
               </tr>
@@ -119,6 +127,14 @@
         <div class="field">
           <label>Control de existencia (opcional)</label>
           <input type="number" id="product-stock" min="0" step="1" placeholder="Vacío = sin límite (ilimitado)">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Receta (insumos que consume esta venta)</label>
+          <p style="color:var(--text-muted); font-size:0.78rem; margin:-4px 0 8px;">
+            Obligatoria: agrega al menos un insumo con stock suficiente en inventario, o no se podrá guardar el producto.
+          </p>
+          <div id="recipe-rows"></div>
+          <button type="button" class="btn btn-outline btn-sm" id="btn-add-recipe-row">+ Agregar insumo</button>
         </div>
       </div>
       <div class="modal-actions">

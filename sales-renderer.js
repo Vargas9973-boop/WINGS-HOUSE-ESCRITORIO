@@ -15,6 +15,56 @@ let employeeAvailableCache = 100; // último "disponible" consultado, para calcu
 let cart = [];
 let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
+let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
+
+// Semáforo de disponibilidad por producto a partir de recipes+inventory
+// (window.db.recipes.getAllWithStock). Copia de common.js: sales.html no
+// incluye common.js (arranca sin guardSession para no bloquear el cobro).
+function computeProductAvailability(recipesRaw) {
+  const byProduct = {};
+  (recipesRaw || []).forEach((r) => {
+    const inv = r.inventory;
+    if (!inv) return;
+    if (!byProduct[r.product_id]) byProduct[r.product_id] = [];
+    byProduct[r.product_id].push({
+      insumoId: inv.id,
+      name: inv.name,
+      unit: inv.unit,
+      stock: Number(inv.stock) || 0,
+      minStock: Number(inv.min_stock) || 0,
+      needed: Number(r.quantity_needed) || 0
+    });
+  });
+
+  const result = {};
+  Object.keys(byProduct).forEach((pid) => {
+    const rows = byProduct[pid];
+    let status = 'verde';
+    let shortInsumo = null;
+    let maxSellable = Infinity;
+    rows.forEach((row) => {
+      if (row.needed > 0) maxSellable = Math.min(maxSellable, Math.floor(row.stock / row.needed));
+      if (row.stock < row.needed) {
+        status = 'rojo';
+        if (!shortInsumo) shortInsumo = row;
+      } else if (status !== 'rojo' && row.stock <= row.minStock) {
+        status = 'amarillo';
+      }
+    });
+    result[pid] = { status, shortInsumo, maxSellable: maxSellable === Infinity ? null : maxSellable };
+  });
+  return result;
+}
+
+async function refreshAvailability() {
+  try {
+    const recipesRaw = await window.db.recipes.getAllWithStock();
+    productAvailability = computeProductAvailability(recipesRaw);
+    renderProducts();
+  } catch (err) {
+    console.error('No se pudo actualizar la disponibilidad de insumos:', err);
+  }
+}
 
 const CATEGORY_LABELS = {
   Alitas: 'Alitas',
@@ -418,6 +468,19 @@ function toast(message, type = 'default') {
   }, 3000);
 }
 
+// Revisa insumos en/bajo su stock mínimo después de cobrar una venta y
+// avisa con un toast rojo por cada uno.
+async function alertLowStockInsumos() {
+  try {
+    const lowStock = await window.db.inventory.checkLowStock();
+    lowStock.forEach((item) => {
+      toast(`Stock bajo: ${item.name} — ${item.stock} ${item.unit || ''} restantes`, 'error');
+    });
+  } catch (err) {
+    console.error('No se pudo revisar el stock mínimo de insumos:', err);
+  }
+}
+
 // ==========================================================================
 // 1. TIPO DE CLIENTE
 // ==========================================================================
@@ -448,14 +511,16 @@ function setClientType(type) {
 // ==========================================================================
 async function loadCatalog() {
   try {
-    const [products, promos, settings] = await Promise.all([
+    const [products, promos, settings, recipesRaw] = await Promise.all([
       window.db.products.getAll(),
       window.db.promotions.getAll(),
-      window.db.settings.getAll()
+      window.db.settings.getAll(),
+      window.db.recipes.getAllWithStock()
     ]);
     allProducts = products.filter((p) => p.active);
     allPromotions = promos.filter((p) => p.active);
     employeeDiscountPct = Number(settings.employee_discount_pct) || 20;
+    productAvailability = computeProductAvailability(recipesRaw);
     await loadEmployeesForSales();
     renderPromoStrip();
     renderProducts();
@@ -537,12 +602,19 @@ function renderProducts() {
       const isTracked = product.stock != null;
       const isOut = isTracked && product.stock <= 0;
       const isLow = isTracked && !isOut && product.stock <= 5;
-      const badgeClass = isOut ? 'out' : isLow ? 'low' : '';
-      const stockBadge = isTracked
-        ? `<div class="stock-badge ${badgeClass}">${isOut ? 'Agotado' : `Existencia: ${product.stock}`}</div>`
+      const avail = productAvailability[product.id];
+      const isNoInsumos = avail && avail.status === 'rojo';
+      const badgeClass = isOut || isNoInsumos ? 'out' : isLow ? 'low' : '';
+      const stockBadge = isNoInsumos
+        ? `<div class="stock-badge out">Sin insumos</div>`
+        : isTracked
+          ? `<div class="stock-badge ${badgeClass}">${isOut ? 'Agotado' : `Existencia: ${product.stock}`}</div>`
+          : '';
+      const title = isNoInsumos && avail.shortInsumo
+        ? ` title="Sin insumos: falta &quot;${escapeHtml(avail.shortInsumo.name)}&quot; (${avail.shortInsumo.stock} ${escapeHtml(avail.shortInsumo.unit || '')} disponibles)"`
         : '';
       return `
-      <div class="product-card ${isOut ? 'is-out-of-stock' : ''}" data-id="${product.id}">
+      <div class="product-card ${isOut || isNoInsumos ? 'is-out-of-stock' : ''}" data-id="${product.id}"${title}>
         <h3>${escapeHtml(product.name)}</h3>
         <div class="price">${fmt(displayPrice(product))}</div>
         ${stockBadge}
@@ -557,6 +629,16 @@ function renderProducts() {
       if (!product) return;
       if (product.stock != null && product.stock <= 0) {
         toast(`"${product.name}" no tiene existencia disponible.`, 'error');
+        return;
+      }
+      const avail = productAvailability[product.id];
+      if (avail && avail.status === 'rojo') {
+        toast(
+          avail.shortInsumo
+            ? `Sin insumos para preparar "${product.name}": falta "${avail.shortInsumo.name}" (${avail.shortInsumo.stock} ${avail.shortInsumo.unit || ''} disponibles).`
+            : `Sin insumos para preparar "${product.name}".`,
+          'error'
+        );
         return;
       }
       addToCart({
@@ -616,6 +698,12 @@ function addToCart(item) {
     return;
   }
 
+  const avail = item.itemType === 'product' ? productAvailability[item.id] : null;
+  if (avail && avail.maxSellable != null && currentQty + 1 > avail.maxSellable) {
+    toast(`Solo alcanza el insumo para ${avail.maxSellable} de "${item.name}".`, 'error');
+    return;
+  }
+
   if (existing) {
     existing.quantity += 1;
   } else {
@@ -632,6 +720,11 @@ function updateQuantity(id, itemType, delta) {
     const stock = stockFor(id);
     if (stock != null && item.quantity + delta > stock) {
       toast(`Solo quedan ${stock} en existencia de "${item.name}".`, 'error');
+      return;
+    }
+    const avail = productAvailability[id];
+    if (avail && avail.maxSellable != null && item.quantity + delta > avail.maxSellable) {
+      toast(`Solo alcanza el insumo para ${avail.maxSellable} de "${item.name}".`, 'error');
       return;
     }
   }
@@ -995,6 +1088,8 @@ btnConfirmCheckout.addEventListener('click', async () => {
     console.log('DEBUG PAYLOAD VENTA:', JSON.stringify(payload, null, 2));
     folioPreview.textContent = `Último ticket: ${sale.folio}`;
     toast(`Venta registrada: ${sale.folio}`, 'success');
+    alertLowStockInsumos();
+    refreshAvailability();
 
  if (chkPrint.checked) {
   try {

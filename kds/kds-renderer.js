@@ -1,0 +1,127 @@
+// KDS de cocina. No usa createClient/Supabase aquí: main.js (proceso
+// principal) hace todas las consultas y Realtime, y solo empuja por IPC
+// (kds:orders / kds:online) vía kds-preload.js -- ver comentario ahí.
+let latestOrders = [];
+const alreadyBeeped = new Set(); // ids que ya sonaron por pasar 18 min, para no repetir cada segundo
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function fmtElapsed(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const ss = String(totalSeconds % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+function orderLabel(order) {
+  if (order.tableNumber) return `Mesa ${order.tableNumber}`;
+  if (order.folio) return `#${order.folio}`;
+  return `Pedido #${order.id}`;
+}
+
+// Beep sintetizado (Web Audio), sin archivo de audio que empaquetar: mismo
+// enfoque que ya usa order-alert.js en el resto de la app.
+function playAlertBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = 660;
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.4, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.55);
+  } catch (err) {
+    console.error('No se pudo reproducir el aviso de orden con retraso:', err);
+  }
+}
+
+function cardHtml(order) {
+  const elapsedMs = Date.now() - new Date(order.createdAt).getTime();
+  const minutes = elapsedMs / 60000;
+  const overClass = minutes >= 18 ? 'over18' : minutes >= 12 ? 'over12' : '';
+
+  if (minutes >= 18 && !alreadyBeeped.has(order.id)) {
+    alreadyBeeped.add(order.id);
+    playAlertBeep();
+  }
+
+  const itemsHtml = (order.items || []).length
+    ? order.items.map((it) => `<div>${it.quantity}x ${escapeHtml(it.name)}</div>`).join('')
+    : '<div style="opacity:.6">Sin artículos</div>';
+
+  const action = order.kdsStatus === 'nueva'
+    ? { cls: 'cook', label: 'COCINAR' }
+    : order.kdsStatus === 'en_preparacion'
+      ? { cls: 'ready', label: 'LISTA' }
+      : { cls: 'deliver', label: 'ENTREGAR' };
+
+  return `
+    <div class="card ${overClass}" data-id="${order.id}">
+      <div class="id">${escapeHtml(orderLabel(order))}</div>
+      <div class="items">${itemsHtml}</div>
+      <div class="timer">${fmtElapsed(elapsedMs)}</div>
+      <button data-action="${action.cls}" data-id="${order.id}">${action.label}</button>
+    </div>
+  `;
+}
+
+function renderColumn(elId, orders, emptyLabel) {
+  const el = document.getElementById(elId);
+  el.innerHTML = orders.length ? orders.map(cardHtml).join('') : `<div class="empty-column">${emptyLabel}</div>`;
+}
+
+function render() {
+  renderColumn('cards-nueva', latestOrders.filter((o) => o.kdsStatus === 'nueva'), 'Sin órdenes nuevas');
+  renderColumn('cards-prep', latestOrders.filter((o) => o.kdsStatus === 'en_preparacion'), 'Nada en preparación');
+  renderColumn('cards-lista', latestOrders.filter((o) => o.kdsStatus === 'lista'), 'Nada listo para entregar');
+}
+
+const ACTION_CALL = {
+  cook: (id) => window.kdsAPI.cook(id),
+  ready: (id) => window.kdsAPI.markReady(id),
+  deliver: (id) => window.kdsAPI.markDelivered(id)
+};
+
+document.getElementById('app').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const id = Number(btn.dataset.id);
+  const call = ACTION_CALL[btn.dataset.action];
+  if (!call) return;
+  btn.disabled = true;
+  call(id).catch((err) => {
+    console.error('No se pudo actualizar la orden:', err);
+    btn.disabled = false;
+  });
+});
+
+function updateClock() {
+  const el = document.getElementById('clock');
+  if (el) el.textContent = new Date().toLocaleTimeString('es-MX');
+}
+
+window.kdsAPI.onOrders((orders) => {
+  latestOrders = orders || [];
+  const validIds = new Set(latestOrders.map((o) => o.id));
+  Array.from(alreadyBeeped).forEach((id) => { if (!validIds.has(id)) alreadyBeeped.delete(id); });
+  render();
+});
+
+window.kdsAPI.onOnline((online) => {
+  document.getElementById('offline').hidden = !!online;
+});
+
+setInterval(render, 1000); // recalcula timers (mm:ss) y clases over12/over18 en vivo
+setInterval(updateClock, 1000);
+updateClock();
+render();

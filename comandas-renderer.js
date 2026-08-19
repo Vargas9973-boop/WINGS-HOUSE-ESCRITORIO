@@ -11,6 +11,56 @@ let currentOrderMode = null; // 'mesa' | 'llevar'
 let currentItems = [];
 let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
+let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
+
+// Semáforo de disponibilidad por producto a partir de recipes+inventory
+// (window.db.recipes.getAllWithStock). Copia de common.js: comandas.html no
+// incluye common.js.
+function computeProductAvailability(recipesRaw) {
+  const byProduct = {};
+  (recipesRaw || []).forEach((r) => {
+    const inv = r.inventory;
+    if (!inv) return;
+    if (!byProduct[r.product_id]) byProduct[r.product_id] = [];
+    byProduct[r.product_id].push({
+      insumoId: inv.id,
+      name: inv.name,
+      unit: inv.unit,
+      stock: Number(inv.stock) || 0,
+      minStock: Number(inv.min_stock) || 0,
+      needed: Number(r.quantity_needed) || 0
+    });
+  });
+
+  const result = {};
+  Object.keys(byProduct).forEach((pid) => {
+    const rows = byProduct[pid];
+    let status = 'verde';
+    let shortInsumo = null;
+    let maxSellable = Infinity;
+    rows.forEach((row) => {
+      if (row.needed > 0) maxSellable = Math.min(maxSellable, Math.floor(row.stock / row.needed));
+      if (row.stock < row.needed) {
+        status = 'rojo';
+        if (!shortInsumo) shortInsumo = row;
+      } else if (status !== 'rojo' && row.stock <= row.minStock) {
+        status = 'amarillo';
+      }
+    });
+    result[pid] = { status, shortInsumo, maxSellable: maxSellable === Infinity ? null : maxSellable };
+  });
+  return result;
+}
+
+async function refreshAvailability() {
+  try {
+    const recipesRaw = await window.db.recipes.getAllWithStock();
+    productAvailability = computeProductAvailability(recipesRaw);
+    renderProducts();
+  } catch (err) {
+    console.error('No se pudo actualizar la disponibilidad de insumos:', err);
+  }
+}
 
 // ==========================================================================
 // ACTUALIZACIÓN AUTOMÁTICA
@@ -181,6 +231,54 @@ function toast(message, type = 'default') {
 
     setTimeout(() => el.remove(), 300);
   }, 3000);
+}
+
+// Revisa insumos en/bajo su stock mínimo después de cobrar una venta y
+// avisa con un toast rojo por cada uno (igual que la alerta de stock de
+// productos que ya existe en el carrito).
+async function alertLowStockInsumos() {
+  try {
+    const lowStock = await window.db.inventory.checkLowStock();
+    lowStock.forEach((item) => {
+      toast(`Stock bajo: ${item.name} — ${item.stock} ${item.unit || ''} restantes`, 'error');
+    });
+  } catch (err) {
+    console.error('No se pudo revisar el stock mínimo de insumos:', err);
+  }
+}
+
+// ==========================================================================
+// AVISO "ORDEN LISTA" (KDS -> caja/mesero) — ver kds/kds-renderer.js. Cocina
+// marca la orden 'lista' en la TV; main.js detecta la transición por
+// Realtime y la manda aquí para no depender de que alguien vaya a ver el
+// KDS físicamente.
+// ==========================================================================
+function playKdsReadyChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.5, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  } catch (err) {
+    console.error('No se pudo reproducir el aviso de orden lista:', err);
+  }
+}
+
+if (window.kdsReadyAPI) {
+  window.kdsReadyAPI.onReady((info) => {
+    const label = info.tableNumber ? `Mesa ${info.tableNumber}` : info.folio ? `folio ${info.folio}` : `#${info.id}`;
+    toast(`¡Orden ${label} lista para entregar!`, 'success');
+    playKdsReadyChime();
+  });
 }
 
 // ==========================================================================
@@ -396,13 +494,15 @@ document.getElementById('btn-back').addEventListener('click', () => {
 async function ensureCatalog() {
   if (catalogLoaded) return;
 
-  const [products, promos] = await Promise.all([
+  const [products, promos, recipesRaw] = await Promise.all([
     window.db.products.getAll(),
-    window.db.promotions.getAll()
+    window.db.promotions.getAll(),
+    window.db.recipes.getAllWithStock()
   ]);
 
   allProducts = products.filter((p) => p.active);
   allPromotions = promos.filter((p) => p.active);
+  productAvailability = computeProductAvailability(recipesRaw);
 
   catalogLoaded = true;
 }
@@ -501,25 +601,33 @@ function renderProducts() {
       const isTracked = product.stock != null;
       const isOut = isTracked && product.stock <= 0;
       const isLow = isTracked && !isOut && product.stock <= 5;
+      const avail = productAvailability[product.id];
+      const isNoInsumos = avail && avail.status === 'rojo';
 
-      const badgeClass = isOut
+      const badgeClass = isOut || isNoInsumos
         ? 'out'
         : isLow
           ? 'low'
           : '';
 
-      const stockBadge = isTracked
-        ? `
+      const stockBadge = isNoInsumos
+        ? `<div class="stock-badge out">Sin insumos</div>`
+        : isTracked
+          ? `
           <div class="stock-badge ${badgeClass}">
             ${isOut ? 'Agotado' : `Existencia: ${product.stock}`}
           </div>
         `
+          : '';
+
+      const title = isNoInsumos && avail.shortInsumo
+        ? ` title="Sin insumos: falta &quot;${escapeHtml(avail.shortInsumo.name)}&quot; (${avail.shortInsumo.stock} ${escapeHtml(avail.shortInsumo.unit || '')} disponibles)"`
         : '';
 
       return `
         <div
-          class="product-card ${isOut ? 'is-out-of-stock' : ''}"
-          data-id="${product.id}"
+          class="product-card ${isOut || isNoInsumos ? 'is-out-of-stock' : ''}"
+          data-id="${product.id}"${title}
         >
           <h3>${escapeHtml(product.name)}</h3>
           <div class="price">${fmt(product.price)}</div>
@@ -540,6 +648,17 @@ function renderProducts() {
       if (product.stock != null && product.stock <= 0) {
         toast(
           `"${product.name}" no tiene existencia disponible.`,
+          'error'
+        );
+        return;
+      }
+
+      const avail = productAvailability[product.id];
+      if (avail && avail.status === 'rojo') {
+        toast(
+          avail.shortInsumo
+            ? `Sin insumos para preparar "${product.name}": falta "${avail.shortInsumo.name}" (${avail.shortInsumo.stock} ${avail.shortInsumo.unit || ''} disponibles).`
+            : `Sin insumos para preparar "${product.name}".`,
           'error'
         );
         return;
@@ -802,6 +921,7 @@ async function addToOrder(item) {
     );
 
     await refreshOrder();
+    refreshAvailability();
 
   } catch (err) {
     console.error(err);
@@ -972,6 +1092,7 @@ function renderCart(total) {
             );
 
             await refreshOrder();
+            refreshAvailability();
 
           } catch (err) {
             console.error(err);
@@ -1011,6 +1132,7 @@ async function changeQty(itemId, delta) {
     );
 
     await refreshOrder();
+    refreshAvailability();
 
   } catch (err) {
     console.error(err);
@@ -1296,6 +1418,9 @@ document
             : `Mesa ${currentTableNumber} cobrada: ${result.folio}`,
           'success'
         );
+
+        alertLowStockInsumos();
+        catalogLoaded = false; // fuerza a releer stock/receta en la próxima mesa
 
         // ------------------------------------------------------------
         // IMPRESIÓN

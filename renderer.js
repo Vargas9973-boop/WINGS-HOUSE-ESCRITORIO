@@ -58,6 +58,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     menuItems.forEach((item, index) => {
       const card = document.createElement('div');
       card.className = 'card';
+      card.dataset.itemId = item.id;
       card.innerHTML = `
         <div class="card-icon">${item.icon}</div>
         <div class="card-title">${item.title}</div>
@@ -78,6 +79,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     updateCarousel();
+    showLowStockBadge();
+  }
+
+  // Muestra en la tarjeta INVENTARIOS cuántos insumos están en/bajo su
+  // stock mínimo, igual que la alerta que ya corre dentro del módulo.
+  async function showLowStockBadge() {
+    if (!menuItems.some((item) => item.id === 'inventarios')) return;
+    try {
+      const lowStock = await window.db.inventory.checkLowStock();
+      const card = track.querySelector('[data-item-id="inventarios"]');
+      if (!card) return;
+      card.querySelector('.card-low-stock-badge')?.remove();
+      if (lowStock.length === 0) return;
+      const badge = document.createElement('div');
+      badge.className = 'card-low-stock-badge';
+      badge.textContent = lowStock.length;
+      badge.title = `${lowStock.length} insumo(s) en stock bajo`;
+      card.appendChild(badge);
+    } catch (err) {
+      console.error('No se pudo revisar el stock mínimo de insumos:', err);
+    }
   }
 
   function updateCarousel() {

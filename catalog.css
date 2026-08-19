@@ -1,0 +1,48 @@
+.recipe-row {
+  margin-bottom: 8px;
+}
+
+.recipe-row select {
+  flex: 1;
+}
+
+.recipe-row .recipe-qty {
+  width: 110px;
+}
+
+.recipe-unit-badge {
+  min-width: 40px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--accent, #2563eb);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+  text-transform: none;
+}
+
+.recipe-unit-badge.is-empty {
+  background: rgba(148, 148, 148, 0.15);
+  color: var(--text-muted);
+}
+
+.recipe-qty-preview {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  min-width: 70px;
+}
+
+.recipe-empty {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin-bottom: 8px;
+}
+
+.tag.warning { background: rgba(245, 158, 11, 0.15); color: var(--accent-warning); }
+
+.recipe-cost-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}

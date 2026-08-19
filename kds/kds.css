@@ -1,0 +1,144 @@
+/* Pantalla para TV por HDMI: sin imágenes de fondo, solo color, y todo en
+   unidades relativas al viewport (vw/vh/clamp) para verse bien igual en un
+   monitor de escritorio que en una TV grande a la distancia de la cocina. */
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #111;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.header {
+  height: 6vh;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1vw;
+  font-size: clamp(14px, 1.2vw, 20px);
+  background: #000;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+#clock {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.board {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1vw;
+  padding: 1vw;
+  height: 94vh;
+}
+
+.column {
+  background: #1a1a1a;
+  border-radius: 0.8vw;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.column h2 {
+  text-align: center;
+  padding: 0.8vw;
+  margin: 0;
+  font-size: clamp(16px, 1.5vw, 28px);
+  position: sticky;
+  top: 0;
+}
+
+#col-nueva h2 { background: #ef4444; }
+#col-prep h2 { background: #f59e0b; color: #000; }
+#col-lista h2 { background: #22c55e; color: #000; }
+
+.empty-column {
+  text-align: center;
+  padding: 2vh 1vw;
+  opacity: 0.4;
+  font-size: clamp(12px, 1vw, 16px);
+}
+
+.card {
+  background: #222;
+  margin: 0.6vw;
+  padding: 1vw;
+  border-radius: 0.6vw;
+  min-height: 12vh;
+  border-left: 0.5vw solid #555;
+  font-size: clamp(14px, 1.3vw, 22px);
+}
+
+.card .id {
+  font-weight: 900;
+  font-size: clamp(18px, 1.8vw, 32px);
+}
+
+.card .items {
+  margin: 0.6vw 0;
+  line-height: 1.5;
+  opacity: 0.92;
+}
+
+.card .timer {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+.card.over12 { border-color: #f59e0b; }
+.card.over18 { border-color: #ef4444; animation: pulse 1s infinite; }
+
+.card button {
+  width: 100%;
+  padding: 0.8vw;
+  font-size: clamp(14px, 1.4vw, 20px);
+  font-weight: 700;
+  margin-top: 0.5vw;
+  cursor: pointer;
+  border: none;
+  border-radius: 0.4vw;
+  background: #2563eb;
+  color: #fff;
+}
+
+.card button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+#offline {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(20px, 3vw, 48px);
+  font-weight: 800;
+  color: #ef4444;
+  text-align: center;
+  z-index: 999;
+}
+
+#offline[hidden] { display: none; }

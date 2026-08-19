@@ -64,6 +64,23 @@ function getWeekRange(paydayNumber, referenceDate) {
   return { start: localDateStr(start), end: localDateStr(end) };
 }
 
+// payroll_weeks y employee_weekly_credit (bono acreditado y crédito semanal
+// por excedente) se acumulan por semana ISO lunes-domingo -- así los siembra
+// process_sale con date_trunc('week', ...), sin importar el día de pago
+// configurado en Ajustes. getWeekRange arriba sí respeta ese día de pago
+// para el rango que se muestra en pantalla (p.ej. domingo-sábado si el pago
+// es sábado), así que para leer/escribir esas dos tablas hay que traducir
+// la semana visible a su lunes ISO. Se ancla en weekEnd (el día de pago)
+// porque ese es el día que sí cae siempre dentro de la semana ISO correcta;
+// weekStart puede caer un día antes y pertenecer a la semana ISO anterior.
+function isoMondayOf(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return localDateStr(d);
+}
+
 // ==========================================================================
 // ARRANQUE — siembra las cuentas por defecto si la tabla 'users' está vacía.
 // El resto del catálogo/inventario/ajustes ya se siembra desde el script SQL
@@ -839,6 +856,85 @@ async function comandaCancelTable(saleId) {
 }
 
 // ==========================================================================
+// 5B. KDS (Kitchen Display System) — TV de cocina por HDMI, sin login.
+// ==========================================================================
+// No hay una tabla "orders" aparte: cada comanda/venta YA es una fila de
+// `sales` (mesa, para llevar, mostrador, y también lo que inserta
+// wing-house-web, que no se toca). Se le agregaron 4 columnas a `sales`
+// (kds_status/kds_started_at/kds_ready_at/kds_delivered_at, ver
+// supabase/migrations/20260818040000_kds_status.sql) para que el KDS sea
+// solo una vista distinta de los mismos datos, no un sistema paralelo que
+// se pueda desincronizar.
+const KDS_STATUSES = ['nueva', 'en_preparacion', 'lista', 'entregada'];
+const KDS_TIMESTAMP_COLUMN = {
+  en_preparacion: 'kds_started_at',
+  lista: 'kds_ready_at',
+  entregada: 'kds_delivered_at'
+};
+
+// Todo lo que la cocina todavía no entregó, con sus artículos. Se excluyen
+// las canceladas (canceladas antes de cocinar no deben seguir pidiendo que
+// se cocinen) aunque su kds_status nunca se haya tocado.
+async function getKdsOrders() {
+  const { data: sales, error } = await supabase
+    .from('sales')
+    .select('id, table_number, client_type, folio, status, created_at, kds_status, kds_started_at, kds_ready_at')
+    .neq('kds_status', 'entregada')
+    .neq('status', 'cancelada')
+    .order('created_at', { ascending: true });
+  must(error, 'No se pudieron obtener las órdenes de cocina');
+  if (!sales || sales.length === 0) return [];
+
+  const { data: items, error: itemsErr } = await supabase
+    .from('sale_items')
+    .select('sale_id, name, quantity')
+    .in('sale_id', sales.map((s) => s.id))
+    .order('id', { ascending: true });
+  must(itemsErr, 'No se pudieron obtener los artículos de las órdenes de cocina');
+
+  const itemsBySale = {};
+  (items || []).forEach((it) => {
+    if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
+    itemsBySale[it.sale_id].push({ name: it.name, quantity: Number(it.quantity) || 0 });
+  });
+
+  return sales.map((s) => ({
+    id: s.id,
+    tableNumber: s.table_number,
+    clientType: s.client_type,
+    folio: s.folio,
+    createdAt: s.created_at,
+    kdsStatus: s.kds_status,
+    kdsStartedAt: s.kds_started_at,
+    kdsReadyAt: s.kds_ready_at,
+    items: itemsBySale[s.id] || []
+  }));
+}
+
+async function updateKdsStatus(saleId, status) {
+  if (!KDS_STATUSES.includes(status)) throw new Error(`Estado de KDS inválido: ${status}`);
+  const patch = { kds_status: status };
+  const tsColumn = KDS_TIMESTAMP_COLUMN[status];
+  if (tsColumn) patch[tsColumn] = new Date().toISOString();
+  const { error } = await supabase.from('sales').update(patch).eq('id', saleId);
+  must(error, 'No se pudo actualizar el estado de cocina');
+  return true;
+}
+
+// Un solo canal para altas/cambios de sales y de sale_items (agregar/quitar
+// un artículo a una mesa ya abierta también debe refrescar la TV). El
+// llamador (main.js) simplemente vuelve a pedir getKdsOrders() completo en
+// cada evento -- mismo patrón simple que subscribeToNewSales, sin intentar
+// aplicar parches incrementales del lado del cliente.
+function subscribeToKdsChanges(onChange) {
+  return supabase
+    .channel('kds-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, onChange)
+    .subscribe();
+}
+
+// ==========================================================================
 // 6. INVENTARIO
 // ==========================================================================
 async function getAllInventory() {
@@ -847,29 +943,72 @@ async function getAllInventory() {
   return data;
 }
 
-async function createInventoryItem(data) {
+async function createInventoryItem(data, user = null) {
+  const name = String(data.name || '').trim();
+  if (!name) throw new Error('El nombre del insumo es obligatorio.');
+  const initialStock = Number(data.stock) || 0;
+  if (initialStock < 0) throw new Error('La existencia inicial no puede ser negativa.');
+
   const { data: row, error } = await supabase.from('inventory').insert([{
-    name: data.name,
-    unit: data.unit || 'pza',
-    stock: Number(data.stock) || 0,
+    name,
+    category: data.category || null,
+    unit: data.unit || 'pz',
+    stock: initialStock,
     min_stock: Number(data.min_stock) || 0,
     cost_per_unit: Number(data.cost_per_unit) || 0,
     branch_id: getCurrentBranchId()
   }]).select().single();
+  if (error && error.code === '23505') throw new Error(`Ya existe un insumo llamado "${name}".`);
   must(error, 'No se pudo crear el insumo');
+
+  if (initialStock > 0) {
+    const { error: movErr } = await supabase.from('inventory_movements').insert([{
+      insumo_id: row.id,
+      type: 'entrada',
+      quantity: initialStock,
+      reason: 'Alta de insumo - existencia inicial',
+      created_by: user
+    }]);
+    if (movErr) console.error('No se pudo registrar el movimiento de alta:', movErr.message);
+  }
+
   return row;
 }
 
-async function updateInventoryItem(id, data) {
+async function updateInventoryItem(id, data, user = null) {
+  const name = String(data.name || '').trim();
+  if (!name) throw new Error('El nombre del insumo es obligatorio.');
+
+  const { data: before, error: beforeErr } = await supabase.from('inventory').select('*').eq('id', id).single();
+  must(beforeErr, 'Insumo no encontrado');
+
+  const newStock = Number(data.stock) || 0;
+  if (newStock < 0) throw new Error('La existencia no puede ser negativa.');
+
   const { error } = await supabase.from('inventory').update({
-    name: data.name,
-    unit: data.unit || 'pza',
-    stock: Number(data.stock) || 0,
+    name,
+    category: data.category || null,
+    unit: data.unit || 'pz',
+    stock: newStock,
     min_stock: Number(data.min_stock) || 0,
     cost_per_unit: Number(data.cost_per_unit) || 0,
     updated_at: new Date().toISOString()
   }).eq('id', id);
+  if (error && error.code === '23505') throw new Error(`Ya existe un insumo llamado "${name}".`);
   must(error, 'No se pudo actualizar el insumo');
+
+  const delta = newStock - Number(before.stock || 0);
+  if (delta !== 0) {
+    const { error: movErr } = await supabase.from('inventory_movements').insert([{
+      insumo_id: Number(id),
+      type: 'ajuste',
+      quantity: delta,
+      reason: 'Ajuste manual desde edición de insumo',
+      created_by: user
+    }]);
+    if (movErr) console.error('No se pudo registrar el movimiento de ajuste:', movErr.message);
+  }
+
   const { data: row, error: selErr } = await supabase.from('inventory').select('*').eq('id', id).single();
   must(selErr);
   return row;
@@ -881,6 +1020,136 @@ async function removeInventoryItem(id) {
   const { error } = await supabase.from('inventory').delete().eq('id', id);
   must(error, 'No se pudo eliminar el insumo');
   return { deleted: true };
+}
+
+// Agrega existencia a un insumo ya existente (compra, ajuste) sin pasar por
+// el modal de edición completo. Registra el movimiento y, opcionalmente,
+// actualiza el costo por unidad si llega uno nuevo.
+async function addInventoryStock(id, data, user = null) {
+  const quantity = Number(data.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error('La cantidad a agregar debe ser mayor que cero.');
+  }
+
+  const { data: item, error: selErr } = await supabase.from('inventory').select('*').eq('id', id).single();
+  must(selErr, 'Insumo no encontrado');
+
+  const update = {
+    stock: Number(item.stock || 0) + quantity,
+    updated_at: new Date().toISOString()
+  };
+  if (data.cost_per_unit !== undefined && data.cost_per_unit !== null && data.cost_per_unit !== '') {
+    update.cost_per_unit = Number(data.cost_per_unit) || 0;
+  }
+
+  const { data: row, error } = await supabase.from('inventory').update(update).eq('id', id).select().single();
+  must(error, 'No se pudo agregar la existencia');
+
+  const { error: movErr } = await supabase.from('inventory_movements').insert([{
+    insumo_id: Number(id),
+    type: 'entrada',
+    quantity,
+    reason: data.reason || 'Compra',
+    created_by: user
+  }]);
+  if (movErr) console.error('No se pudo registrar el movimiento de entrada:', movErr.message);
+
+  return row;
+}
+
+async function getInventoryMovements(insumoId) {
+  const { data, error } = await supabase
+    .from('inventory_movements')
+    .select('*')
+    .eq('insumo_id', insumoId)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  must(error, 'No se pudo obtener el historial del insumo');
+  return data;
+}
+
+async function checkLowStockInventory() {
+  const { data, error } = await supabase
+    .from('inventory')
+    .select('*')
+    .eq('branch_id', getCurrentBranchId())
+    .order('name');
+  must(error, 'No se pudo revisar el stock mínimo');
+  return (data || []).filter((i) => Number(i.stock) <= Number(i.min_stock));
+}
+
+// ==========================================================================
+// 6.1 RECETAS (liga productos del catálogo con los insumos que consumen)
+// ==========================================================================
+async function getRecipesForProduct(productId) {
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('*, inventory:insumo_id(id, name, unit, stock, cost_per_unit)')
+    .eq('product_id', productId);
+  must(error, 'No se pudo obtener la receta del producto');
+  return data;
+}
+
+// Reemplaza por completo la receta de un producto con la lista recibida:
+// [{ insumo_id, quantity_needed }]
+async function setRecipesForProduct(productId, rows) {
+  const { error: delErr } = await supabase.from('recipes').delete().eq('product_id', productId);
+  must(delErr, 'No se pudo actualizar la receta');
+
+  const clean = (rows || [])
+    .filter((r) => r.insumo_id && Number(r.quantity_needed) > 0)
+    .map((r) => ({ product_id: productId, insumo_id: Number(r.insumo_id), quantity_needed: Number(r.quantity_needed) }));
+
+  if (clean.length === 0) return [];
+
+  const { data, error } = await supabase.from('recipes').insert(clean).select();
+  must(error, 'No se pudo guardar la receta');
+  return data;
+}
+
+// Costo real de un producto según su receta (suma de insumo.cost_per_unit * quantity_needed).
+async function getRecipeCost(productId) {
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('quantity_needed, inventory:insumo_id(cost_per_unit)')
+    .eq('product_id', productId);
+  must(error, 'No se pudo calcular el costo de receta');
+  if (!data || data.length === 0) return null;
+  return data.reduce((sum, r) => sum + Number(r.quantity_needed) * Number(r.inventory ? r.inventory.cost_per_unit : 0), 0);
+}
+
+// Todas las recetas con la existencia/mínimo actual del insumo y el nombre
+// del producto -- una sola consulta para que catalog/sales/comandas-renderer
+// calculen el semáforo de disponibilidad (verde/amarillo/rojo/sin receta)
+// sin pedir producto por producto.
+async function getAllRecipesWithStock() {
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('product_id, insumo_id, quantity_needed, inventory:insumo_id(id, name, unit, stock, min_stock), products:product_id(id, name)');
+  must(error, 'No se pudo obtener las recetas con existencia');
+  return data;
+}
+
+// IDs de productos que ya tienen receta configurada (para marcar "Sin receta" en catálogo).
+async function getProductIdsWithRecipe() {
+  const { data, error } = await supabase.from('recipes').select('product_id');
+  must(error, 'No se pudo obtener la lista de recetas');
+  return Array.from(new Set((data || []).map((r) => r.product_id)));
+}
+
+// Costo real (según receta) de todos los productos en una sola consulta,
+// para mostrarlo en el catálogo sin hacer una llamada por producto.
+async function getAllRecipeCosts() {
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('product_id, quantity_needed, inventory:insumo_id(cost_per_unit)');
+  must(error, 'No se pudo calcular el costo de las recetas');
+  const costsByProduct = {};
+  (data || []).forEach((r) => {
+    const cost = Number(r.quantity_needed) * Number(r.inventory ? r.inventory.cost_per_unit : 0);
+    costsByProduct[r.product_id] = (costsByProduct[r.product_id] || 0) + cost;
+  });
+  return costsByProduct;
 }
 
 // ==========================================================================
@@ -1551,13 +1820,24 @@ async function getPayrollData(weekStart, weekEnd) {
     .from('employees').select('*').eq('active', true).order('name');
   must(empErr, 'No se pudieron obtener los empleados');
 
-  const { data: deductions, error: dedErr } = await supabase
-    .from('payroll_deductions')
-    .select('*')
-    .eq('status', 'pendiente')
-    .gte('created_at', `${weekStart}T00:00:00`)
-    .lte('created_at', `${weekEnd}T23:59:59.999`);
-  must(dedErr, 'No se pudieron obtener las deducciones de nómina');
+  // Bono acreditado y crédito semanal por excedente viven en payroll_weeks /
+  // employee_weekly_credit, ambas indexadas por semana ISO lunes-domingo
+  // (ver isoMondayOf); weekStart/weekEnd aquí son el rango que se muestra en
+  // pantalla (respeta el día de pago configurado) y se usan tal cual para
+  // faltas y beneficio $100, que sí son consultas por rango de timestamp.
+  const bonusWeekStart = isoMondayOf(weekEnd);
+
+  const { data: bonusRecords, error: bonusErr } = await supabase
+    .from('payroll_weeks')
+    .select('employee_id, bonus_credited')
+    .eq('week_start', bonusWeekStart);
+  must(bonusErr, 'No se pudo obtener el bono acreditado de la semana');
+
+  const { data: creditRows, error: credErr } = await supabase.rpc(
+    'get_payroll_week_credit',
+    { p_week_start: bonusWeekStart }
+  );
+  must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
   const { data: attendance, error: attErr } = await supabase
     .from('attendance')
@@ -1586,13 +1866,11 @@ async function getPayrollData(weekStart, weekEnd) {
     .lte('created_at', `${weekEnd}T23:59:59.999`);
   must(consErr, 'No se pudo obtener el beneficio de empleados de la semana');
 
-  const dedByEmployee = {};
-  (deductions || []).forEach((d) => {
-    const key = d.employee_name;
-    if (!dedByEmployee[key]) dedByEmployee[key] = { total: 0, count: 0 };
-    dedByEmployee[key].total += Number(d.amount) || 0;
-    dedByEmployee[key].count += 1;
-  });
+  const bonusByEmployee = {};
+  (bonusRecords || []).forEach((r) => (bonusByEmployee[r.employee_id] = !!r.bonus_credited));
+
+  const creditByEmployee = {};
+  (creditRows || []).forEach((r) => (creditByEmployee[r.employee_id] = r));
 
   const attByEmployee = {};
   (attendance || []).forEach((a) => {
@@ -1620,27 +1898,49 @@ async function getPayrollData(weekStart, weekEnd) {
 
   return (employees || []).map((emp) => {
     const salary = Number(emp.salary) || 0;
-    const creditos = dedByEmployee[emp.name]?.total || 0;
-    const creditosCount = dedByEmployee[emp.name]?.count || 0;
+    const bonoSemanal = Number(emp.weekly_bonus) || 0;
+    const bonusCredited = !!bonusByEmployee[emp.id];
+    const credit = creditByEmployee[emp.id];
+    const creditoSemanal = Number(credit?.credit_amount) || 0;
+    const efectivoExcedente = Number(credit?.paid_amount) || 0;
     const tieneHistorialAsistencia = employeesWithAttendanceHistory.has(emp.id);
     const diasAsistidos = attByEmployee[emp.id] || new Set();
     const faltas = tieneHistorialAsistencia ? workDays.filter((d) => !diasAsistidos.has(d)).length : 0;
     const deduccionFaltas = Math.round((salary / faltaDeductionDivisor()) * faltas * 100) / 100;
     const beneficioUsado = benefitByEmployee[emp.id] || 0;
-    const totalAPagar = Math.max(salary - creditos - deduccionFaltas, 0);
+    const totalAPagar = Math.max(
+      salary + (bonusCredited ? bonoSemanal : 0) - creditoSemanal - efectivoExcedente - deduccionFaltas,
+      0
+    );
 
     return {
       employeeId: emp.id,
       employeeName: emp.name,
+      puesto: emp.role,
       sueldoBase: salary,
-      creditos,
-      creditosCount,
+      bonoSemanal,
+      bonusCredited,
+      bonusWeekStart,
+      creditoSemanal,
+      efectivoExcedente,
       faltas,
       deduccionFaltas,
       beneficioUsado,
       totalAPagar,
       sinHistorialAsistencia: !tieneHistorialAsistencia
     };
+  });
+}
+
+// Acredita/desacredita el bono semanal desde el módulo Nómina unificado.
+// Reusa setPayrollBonus (payroll_weeks + RPC set_payroll_bonus, ya probado)
+// traduciendo la semana visible (weekEnd = día de pago) a su semana ISO
+// lunes-domingo -- ver isoMondayOf.
+async function saveBonoAcreditacion(employeeId, weekEnd, acredita) {
+  return setPayrollBonus({
+    employeeId,
+    weekStart: isoMondayOf(weekEnd),
+    bonusCredited: !!acredita
   });
 }
 
@@ -1658,6 +1958,26 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
   const { data: employee, error: empErr } = await supabase
     .from('employees').select('id').eq('name', employeeName).maybeSingle();
   must(empErr);
+
+  let beneficio = [];
+  if (employee) {
+    const { data: ventas, error: ventasErr } = await supabase
+      .from('sales')
+      .select('created_at, employee_benefit_before, employee_benefit_after')
+      .eq('employee_id', employee.id)
+      .eq('client_type', 'employee')
+      .eq('status', 'completada')
+      .gte('created_at', `${weekStart}T00:00:00`)
+      .lte('created_at', `${weekEnd}T23:59:59.999`)
+      .order('created_at', { ascending: false });
+    must(ventasErr, 'No se pudo obtener el beneficio de empleado del empleado');
+    beneficio = (ventas || [])
+      .map((s) => ({
+        created_at: s.created_at,
+        usado: Math.max((Number(s.employee_benefit_before) || 0) - (Number(s.employee_benefit_after) || 0), 0)
+      }))
+      .filter((s) => s.usado > 0);
+  }
 
   let faltasDias = [];
   if (employee) {
@@ -1689,7 +2009,7 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
     }
   }
 
-  return { creditos: creditos || [], faltasDias };
+  return { creditos: creditos || [], faltasDias, beneficio };
 }
 
 // Cierra la nómina de la semana: guarda un snapshot por empleado en
@@ -1704,7 +2024,11 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
     employee_id: r.employeeId,
     employee_name: r.employeeName,
     sueldo_base: r.sueldoBase,
-    creditos: r.creditos,
+    // payroll_history no tiene columnas separadas para bono/efectivo
+    // excedente; 'creditos' guarda aquí el total de ambas deducciones
+    // semanales (crédito de consumo + efectivo excedente), consistente con
+    // total_pagado ya neto de todo.
+    creditos: r.creditoSemanal + r.efectivoExcedente,
     faltas: r.faltas,
     deduccion_faltas: r.deduccionFaltas,
     beneficio_usado: r.beneficioUsado,
@@ -1889,9 +2213,15 @@ async function getUnifiedHistory(filters = {}) {
     mermaTotal: sumTipo('merma')
   };
 
-  // Filtros finales sobre las filas a mostrar.
+  // Filtros finales sobre las filas a mostrar. "credito_nomina" no es un
+  // tipo propio (una venta domicilio/para llevar/etc. puede haberse pagado
+  // así): se filtra por método, no por tipo.
   const filtered = rows.filter((r) => {
-    if (filters.tipo && filters.tipo !== 'todos' && r.tipo !== filters.tipo) return false;
+    if (filters.tipo === 'credito_nomina') {
+      if (r.metodo !== 'credito_nomina') return false;
+    } else if (filters.tipo && filters.tipo !== 'todos' && r.tipo !== filters.tipo) {
+      return false;
+    }
     if (filters.employeeName && r.empleadoNombre !== filters.employeeName) return false;
     if (filters.paymentMethod && r.metodo !== filters.paymentMethod) return false;
     return true;
@@ -1916,6 +2246,50 @@ async function setSetting(key, value) {
   must(error, 'No se pudo guardar el ajuste');
   return true;
 }
+
+// Lector de huella biométrico (Ajustes -> Asistencia/Biometría). Igual que
+// getPayrollSettings: un valor JSON guardado bajo una sola key de settings.
+// Default siempre deshabilitado -- si la key no existe (instalación previa
+// a esta función) el sistema sigue en modo manual, no falla.
+async function getBiometricSettings() {
+  const settings = await getAllSettings();
+  let enabled = false;
+  let model = 'u_are_u_4500';
+  if (settings.biometric_enabled) {
+    try {
+      const parsed = JSON.parse(settings.biometric_enabled);
+      enabled = !!parsed.enabled;
+      if (parsed.model) model = parsed.model;
+    } catch {
+      // valor legado/corrupto: se usa el default (deshabilitado)
+    }
+  }
+  return { enabled, model };
+}
+
+// Guarda la plantilla de huella de un empleado. employees ya acepta
+// .update() directo (mismo patrón que updateEmployee), sin RPC. Si las
+// columnas fingerprint_template/fingerprint_enrolled todavía no existen
+// (falta correr la migración 20260818000000_biometric_fingerprint.sql) esto
+// lanza un error claro en vez de romper el resto de la app.
+async function saveFingerprint(employeeId, template) {
+  const { error } = await supabase
+    .from('employees')
+    .update({ fingerprint_template: template, fingerprint_enrolled: true })
+    .eq('id', employeeId);
+  must(error, 'No se pudo guardar la huella del empleado');
+  return true;
+}
+
+async function clearFingerprint(employeeId) {
+  const { error } = await supabase
+    .from('employees')
+    .update({ fingerprint_template: null, fingerprint_enrolled: false })
+    .eq('id', employeeId);
+  must(error, 'No se pudo borrar la huella del empleado');
+  return true;
+}
+
 module.exports = {
   init,
   hashPassword,
@@ -1962,11 +2336,25 @@ module.exports = {
   comandaRemoveItem,
   comandaCloseTable,
   comandaCancelTable,
+  // kds
+  getKdsOrders,
+  updateKdsStatus,
+  subscribeToKdsChanges,
   // inventario
   getAllInventory,
   createInventoryItem,
   updateInventoryItem,
   removeInventoryItem,
+  addInventoryStock,
+  getInventoryMovements,
+  checkLowStockInventory,
+  // recetas
+  getRecipesForProduct,
+  setRecipesForProduct,
+  getRecipeCost,
+  getProductIdsWithRecipe,
+  getAllRecipeCosts,
+  getAllRecipesWithStock,
   // merma
   getAllWaste,
   createWaste,
@@ -2001,10 +2389,15 @@ module.exports = {
   getWeekRange,
   getPayrollSettings,
   getPayrollData,
+  saveBonoAcreditacion,
   getPayrollDetail,
   closePayrollWeek,
   getUnifiedHistory,
   // ajustes
   getAllSettings,
-  setSetting
+  setSetting,
+  // biometría
+  getBiometricSettings,
+  saveFingerprint,
+  clearFingerprint
 };

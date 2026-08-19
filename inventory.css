@@ -1,0 +1,46 @@
+.inventory-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+#low-stock-banner:empty {
+  display: none;
+}
+
+.low-stock-banner {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-left: 4px solid var(--accent-danger);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.low-stock-banner strong {
+  color: var(--accent-danger);
+}
+
+.data-table tbody tr.row-danger td {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.data-table tbody tr.row-danger:hover td {
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.modal-box-wide {
+  width: 640px;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.movement-qty-pos { color: var(--accent-success); font-weight: 700; }
+.movement-qty-neg { color: var(--accent-danger); font-weight: 700; }

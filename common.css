@@ -208,6 +208,15 @@ body {
   justify-content: space-between;
 }
 
+.status-indicator {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.status-indicator.connected { color: var(--accent-success); }
+.status-indicator.disconnected { color: var(--text-muted); }
+.status-indicator.error { color: var(--accent-danger); }
+
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

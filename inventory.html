@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wings House - Inventarios</title>
   <link rel="stylesheet" href="common.css">
+  <link rel="stylesheet" href="inventory.css">
 </head>
 <body>
   <div class="module-shell">
@@ -22,10 +23,33 @@
 
     <div class="module-body">
       <div id="kpi-grid" class="kpi-grid"></div>
+      <div id="low-stock-banner"></div>
 
       <div class="section-toolbar">
         <h2>Insumos</h2>
         <button id="btn-new-item" class="btn btn-brand">+ Nuevo insumo</button>
+      </div>
+
+      <div class="inventory-filters">
+        <div class="field">
+          <label>Buscar</label>
+          <input type="text" id="filter-search" placeholder="Nombre del insumo...">
+        </div>
+        <div class="field">
+          <label>Categoría</label>
+          <select id="filter-category">
+            <option value="">Todas</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Ordenar por</label>
+          <select id="filter-sort">
+            <option value="name">Nombre (A-Z)</option>
+            <option value="stock-asc">Stock (menor a mayor)</option>
+            <option value="stock-desc">Stock (mayor a menor)</option>
+            <option value="low-first">Stock bajo primero</option>
+          </select>
+        </div>
       </div>
 
       <div class="table-wrap">
@@ -33,11 +57,13 @@
           <thead>
             <tr>
               <th>Insumo</th>
-              <th>Unidad</th>
+              <th>Categoría</th>
               <th>Existencia</th>
               <th>Mínimo</th>
+              <th>Unidad</th>
               <th>Costo/unidad</th>
               <th>Estado</th>
+              <th>Productos que lo usan</th>
               <th></th>
             </tr>
           </thead>
@@ -47,6 +73,7 @@
     </div>
   </div>
 
+  <!-- MODAL NUEVO/EDITAR INSUMO -->
   <div id="item-modal" class="modal-overlay">
     <div class="modal-box">
       <h2 id="item-modal-title">Nuevo insumo</h2>
@@ -54,14 +81,19 @@
       <div class="form-grid">
         <div class="field" style="grid-column: 1 / -1;">
           <label>Nombre</label>
-          <input type="text" id="item-name" placeholder="Ej. Alitas de pollo">
+          <input type="text" id="item-name" placeholder="Ej. Alitas de pollo" maxlength="120">
+        </div>
+        <div class="field">
+          <label>Categoría</label>
+          <input type="text" id="item-category" list="category-suggestions" placeholder="Ej. carnes, verduras, desechable">
+          <datalist id="category-suggestions"></datalist>
         </div>
         <div class="field">
           <label>Unidad</label>
-          <input type="text" id="item-unit" placeholder="kg, pza, lt...">
+          <select id="item-unit"></select>
         </div>
         <div class="field">
-          <label>Existencia actual</label>
+          <label id="item-stock-label">Existencia inicial</label>
           <input type="number" id="item-stock" min="0" step="0.01">
         </div>
         <div class="field">
@@ -76,6 +108,61 @@
       <div class="modal-actions">
         <button class="btn btn-outline" id="btn-cancel-item">Cancelar</button>
         <button class="btn btn-brand" id="btn-save-item">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL AGREGAR STOCK -->
+  <div id="stock-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Agregar stock — <span id="stock-modal-item-name"></span></h2>
+      <input type="hidden" id="stock-item-id">
+      <div class="form-grid">
+        <div class="field">
+          <label>Cantidad a agregar</label>
+          <input type="number" id="stock-quantity" min="0.01" step="0.01" placeholder="0.00">
+        </div>
+        <div class="field">
+          <label>Costo por unidad (opcional)</label>
+          <input type="number" id="stock-cost" min="0" step="0.01" placeholder="Dejar igual">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Motivo</label>
+          <select id="stock-reason">
+            <option value="Compra">Compra</option>
+            <option value="Ajuste">Ajuste de inventario</option>
+            <option value="Devolución">Devolución</option>
+            <option value="Otro">Otro</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-stock">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-stock">Agregar stock</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL HISTORIAL -->
+  <div id="history-modal" class="modal-overlay">
+    <div class="modal-box modal-box-wide">
+      <h2>Historial — <span id="history-modal-item-name"></span></h2>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Tipo</th>
+              <th>Cantidad</th>
+              <th>Motivo</th>
+              <th>Usuario</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody"></tbody>
+        </table>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-close-history">Cerrar</button>
       </div>
     </div>
   </div>

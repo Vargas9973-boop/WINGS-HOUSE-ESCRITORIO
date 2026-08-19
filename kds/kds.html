@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KDS Cocina</title>
+  <link rel="stylesheet" href="kds.css">
+</head>
+<body>
+  <div id="app">
+    <div class="header">
+      <span>🔥 KDS COCINA — Wings House</span>
+      <span id="clock">--:--:--</span>
+    </div>
+    <div class="board">
+      <div id="col-nueva" class="column">
+        <h2>Nueva</h2>
+        <div class="cards" id="cards-nueva"></div>
+      </div>
+      <div id="col-prep" class="column">
+        <h2>En preparación</h2>
+        <div class="cards" id="cards-prep"></div>
+      </div>
+      <div id="col-lista" class="column">
+        <h2>Lista</h2>
+        <div class="cards" id="cards-lista"></div>
+      </div>
+    </div>
+  </div>
+  <div id="offline" hidden>Sin conexión — reconectando...</div>
+  <script src="kds-renderer.js"></script>
+</body>
+</html>

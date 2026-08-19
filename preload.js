@@ -40,7 +40,18 @@ contextBridge.exposeInMainWorld('db', {
     getAll: () => call('inventory:getAll'),
     create: (data) => call('inventory:create', data),
     update: (id, data) => call('inventory:update', id, data),
-    remove: (id) => call('inventory:remove', id)
+    remove: (id) => call('inventory:remove', id),
+    addStock: (id, data) => call('inventory:addStock', id, data),
+    getMovements: (id) => call('inventory:getMovements', id),
+    checkLowStock: () => call('inventory:checkLowStock')
+  },
+  recipes: {
+    getForProduct: (productId) => call('recipes:getForProduct', productId),
+    setForProduct: (productId, rows) => call('recipes:setForProduct', productId, rows),
+    getCost: (productId) => call('recipes:getCost', productId),
+    getProductIdsWithRecipe: () => call('recipes:getProductIdsWithRecipe'),
+    getAllCosts: () => call('recipes:getAllCosts'),
+    getAllWithStock: () => call('recipes:getAllWithStock')
   },
   waste: {
     getAll: (filters) => call('waste:getAll', filters),
@@ -73,6 +84,7 @@ contextBridge.exposeInMainWorld('db', {
     getSettings: () => call('payroll:getSettings'),
     getWeekRange: (paydayNumber, referenceDate) => call('payroll:getWeekRange', paydayNumber, referenceDate),
     getData: (weekStart, weekEnd) => call('payroll:getData', weekStart, weekEnd),
+    saveBono: (employeeId, weekEnd, acredita) => call('payroll:saveBono', employeeId, weekEnd, acredita),
     getDetail: (employeeName, weekStart, weekEnd) => call('payroll:getDetail', employeeName, weekStart, weekEnd),
     close: (weekStart, weekEnd) => call('payroll:close', weekStart, weekEnd)
   },
@@ -120,6 +132,13 @@ contextBridge.exposeInMainWorld('orderAlertAPI', {
   onStatus: (cb) => ipcRenderer.on('order-alert:status', (event, connected) => cb(connected)),
   onNewSale: (cb) => ipcRenderer.on('order-alert:new-sale', (event, saleId) => cb(saleId))
 });
+// Avisa a caja/meseros cuando cocina marca una orden 'lista' en el KDS
+// (ver kds/), sin que tengan que ir a ver la TV. main.js detecta la
+// transición por Realtime y la manda por este único canal.
+contextBridge.exposeInMainWorld('kdsReadyAPI', {
+  onReady: (cb) => ipcRenderer.on('kds:ready', (event, info) => cb(info))
+});
+
 contextBridge.exposeInMainWorld('corteAPI', {
   getResumen: (fecha) => call('corte:getResumen', fecha),
   printTicket: (html) => call('corte:printTicket', html),
@@ -146,4 +165,11 @@ contextBridge.exposeInMainWorld('printerAPI', {
   list: () => call('printers:list'),
   printTicket: (saleId) => call('print:ticket', saleId),
   test: () => call('printer:test')
+});
+
+contextBridge.exposeInMainWorld('biometricAPI', {
+  getSettings: () => call('biometric:getSettings'),
+  scan: (model) => call('biometric-scan', model),
+  enroll: (employeeId) => call('biometric:enroll', employeeId),
+  identify: () => call('biometric:identify')
 });

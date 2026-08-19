@@ -9,6 +9,14 @@
   <link rel="stylesheet" href="costs.css">
   <link rel="stylesheet" href="reports.css">
   <link rel="stylesheet" href="corte.css">
+  <style>
+    .btn-expand-row {
+      background: none; border: none; color: var(--text-primary); cursor: pointer;
+      font-size: 0.85rem; text-align: left; padding: 0;
+    }
+    .btn-expand-row:hover { color: var(--brand-orange); }
+    .hist-detail-row td { background: var(--bg-panel-2); padding: 10px 14px; }
+  </style>
 </head>
 <body>
   <div class="module-shell">
@@ -51,6 +59,7 @@
             <option value="para_llevar">Para Llevar</option>
             <option value="domicilio">Domicilio</option>
             <option value="merma">Merma</option>
+            <option value="credito_nomina">Crédito Nómina</option>
           </select>
         </div>
         <div class="field">
@@ -110,6 +119,7 @@
       <div id="hist-ticket-body"></div>
       <div class="modal-actions">
         <button class="btn btn-outline" id="btn-close-hist-ticket">Cerrar</button>
+        <button class="btn btn-brand" id="btn-reimprimir-hist-ticket">🖨️ Reimprimir</button>
       </div>
     </div>
   </div>

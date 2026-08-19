@@ -6,6 +6,9 @@ let currentRange = 'today';
 let customFrom = null;
 let customTo = null;
 let currentRows = [];
+let expandedRowId = null;
+let payrollPaydayNumber = 6;
+let currentTicketSaleId = null;
 
 const TIPO_LABELS = {
   venta: 'Venta',
@@ -26,14 +29,6 @@ function isoOffset(days) {
   return localISODate(d);
 }
 
-function mondayISO() {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return localISODate(d);
-}
-
 function firstOfMonthISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
@@ -42,16 +37,30 @@ function firstOfMonthISO() {
 function getRange() {
   if (currentRange === 'today') return { startDate: todayISO(), endDate: todayISO() };
   if (currentRange === 'yesterday') return { startDate: isoOffset(-1), endDate: isoOffset(-1) };
-  if (currentRange === 'week') return { startDate: mondayISO(), endDate: todayISO() };
   if (currentRange === 'month') return { startDate: firstOfMonthISO(), endDate: todayISO() };
   return { startDate: customFrom || todayISO(), endDate: customTo || todayISO() };
 }
 
 document.querySelectorAll('.range-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     document.querySelectorAll('.range-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     currentRange = btn.dataset.range;
+
+    if (currentRange === 'week') {
+      // Misma semana laboral que Nómina (día de pago configurable en
+      // Ajustes), no lunes-domingo fijo.
+      try {
+        const range = await window.db.payroll.getWeekRange(payrollPaydayNumber);
+        document.getElementById('hist-from').value = range.start;
+        document.getElementById('hist-to').value = range.end;
+        loadHistory();
+      } catch (err) {
+        toast('No se pudo calcular la semana laboral.', 'error');
+      }
+      return;
+    }
+
     if (currentRange !== 'custom') {
       const { startDate, endDate } = getRange();
       document.getElementById('hist-from').value = startDate;
@@ -62,12 +71,12 @@ document.querySelectorAll('.range-btn').forEach((btn) => {
 });
 
 function currentFilters() {
-  const { startDate, endDate } = currentRange === 'custom'
-    ? { startDate: document.getElementById('hist-from').value, endDate: document.getElementById('hist-to').value }
-    : getRange();
+  // Todos los botones rápidos (incluido "Esta semana", async) ya escriben
+  // el rango resuelto en los inputs antes de llamar loadHistory(), así que
+  // los inputs son la fuente de verdad aquí.
   return {
-    startDate,
-    endDate,
+    startDate: document.getElementById('hist-from').value,
+    endDate: document.getElementById('hist-to').value,
     tipo: document.getElementById('hist-tipo').value,
     employeeName: document.getElementById('hist-empleado').value || null,
     paymentMethod: document.getElementById('hist-metodo').value || null
@@ -129,6 +138,27 @@ function renderKpis(kpis) {
   `;
 }
 
+function productDetailTableHtml(items) {
+  if (!items || items.length === 0) {
+    return `<div class="empty-state">Sin productos asociados (merma/consumo interno: ver Detalle).</div>`;
+  }
+  const rows = items
+    .map(
+      (it) => `<tr>
+        <td>${escapeHtmlHist(it.name)}</td>
+        <td>${it.quantity}</td>
+        <td>${fmtMoney(it.unit_price)}</td>
+        <td>${fmtMoney(it.subtotal)}</td>
+      </tr>`
+    )
+    .join('');
+  return `
+    <table class="data-table" style="margin:0;">
+      <thead><tr><th>Producto</th><th>Cant</th><th>Precio unit</th><th>Subtotal</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 function renderTable(rows) {
   const tbody = document.getElementById('hist-tbody');
   if (!rows || rows.length === 0) {
@@ -138,23 +168,45 @@ function renderTable(rows) {
   tbody.innerHTML = rows
     .map((r) => {
       const fecha = new Date(r.fecha).toLocaleString('es-MX', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const puedeExpandir = r.items && r.items.length > 0;
+      const isExpanded = expandedRowId === r.id;
       const accion = r.saleId
         ? `<button class="btn btn-outline btn-sm" data-ver-ticket="${r.id}">Ver ticket</button>`
         : '—';
-      return `<tr>
+      const detalleCell = puedeExpandir
+        ? `<button class="btn-expand-row" data-expand="${r.id}" title="Ver productos">${isExpanded ? '▾' : '▸'} ${escapeHtmlHist(r.detalle)}</button>`
+        : escapeHtmlHist(r.detalle);
+
+      const mainRow = `<tr>
         <td>${fecha}</td>
         <td>${TIPO_LABELS[r.tipo] || r.tipo}</td>
-        <td>${escapeHtmlHist(r.detalle)}</td>
+        <td>${detalleCell}</td>
         <td>${fmtMoney(r.total)}</td>
         <td>${escapeHtmlHist(r.metodoLabel)}</td>
         <td>${escapeHtmlHist(r.autorizoCliente)}</td>
         <td>${accion}</td>
       </tr>`;
+
+      const detailRow = isExpanded
+        ? `<tr class="hist-detail-row"><td colspan="7">${productDetailTableHtml(r.items)}</td></tr>`
+        : '';
+
+      return mainRow + detailRow;
     })
     .join('');
 
   tbody.querySelectorAll('[data-ver-ticket]').forEach((btn) =>
-    btn.addEventListener('click', () => openTicketModal(btn.dataset.verTicket))
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openTicketModal(btn.dataset.verTicket);
+    })
+  );
+
+  tbody.querySelectorAll('[data-expand]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      expandedRowId = expandedRowId === btn.dataset.expand ? null : btn.dataset.expand;
+      renderTable(currentRows);
+    })
   );
 }
 
@@ -162,6 +214,7 @@ function openTicketModal(rowId) {
   const row = currentRows.find((r) => r.id === rowId);
   if (!row) return;
 
+  currentTicketSaleId = row.saleId;
   document.getElementById('hist-ticket-title').textContent = `Ticket ${row.folio || ''}`;
 
   const itemsHtml = row.items && row.items.length
@@ -191,6 +244,29 @@ function openTicketModal(rowId) {
 }
 
 document.getElementById('btn-close-hist-ticket').addEventListener('click', () => closeModal('hist-ticket-modal'));
+
+document.getElementById('btn-reimprimir-hist-ticket').addEventListener('click', async () => {
+  if (!currentTicketSaleId) {
+    toast('Este movimiento no tiene ticket para reimprimir.', 'error');
+    return;
+  }
+  const btn = document.getElementById('btn-reimprimir-hist-ticket');
+  btn.disabled = true;
+  try {
+    const result = await window.printerAPI.printTicket(currentTicketSaleId);
+    if (result && result.success) {
+      toast('Ticket enviado a la impresora.', 'success');
+    } else if (result && result.reason === 'cancelled') {
+      // el usuario canceló el diálogo de impresión, no es un error
+    } else {
+      toast('No se pudo reimprimir el ticket.', 'error');
+    }
+  } catch (err) {
+    toast('No se pudo reimprimir el ticket.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 document.getElementById('btn-buscar-historial').addEventListener('click', () => {
   customFrom = document.getElementById('hist-from').value;
@@ -245,6 +321,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!session) return;
   document.getElementById('hist-from').value = todayISO();
   document.getElementById('hist-to').value = todayISO();
+
+  try {
+    const settings = await window.db.payroll.getSettings();
+    payrollPaydayNumber = settings.dayNumber;
+  } catch (err) {
+    payrollPaydayNumber = 6;
+  }
+
   await loadEmployeesFilter();
   loadHistory();
 });

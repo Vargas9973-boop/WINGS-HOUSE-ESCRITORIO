@@ -31,16 +31,21 @@
         <button id="btn-cerrar-nomina" class="btn btn-brand">Cerrar nómina</button>
       </div>
 
+      <div id="payroll-kpis" class="kpi-grid"></div>
+
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr>
               <th>Empleado</th>
-              <th>Sueldo Base</th>
-              <th>Créditos consumo</th>
+              <th>Puesto</th>
+              <th>Salario</th>
+              <th>Bono semanal</th>
+              <th>¿Acredita bono?</th>
+              <th>Crédito semanal (excedente)</th>
+              <th>Efectivo excedente cobrado</th>
+              <th>Beneficio $100 usado</th>
               <th>Faltas</th>
-              <th>Deducción faltas</th>
-              <th>Beneficio $100</th>
               <th>Total a pagar</th>
               <th></th>
             </tr>
@@ -54,8 +59,9 @@
   <div id="payroll-detail-modal" class="modal-overlay">
     <div class="modal-box">
       <h2 id="payroll-detail-title">Detalle</h2>
-      <div class="section-toolbar" style="margin-top:10px;">
-        <h2 style="font-size:0.95rem;">Créditos de consumo (excedente a nómina)</h2>
+
+      <div class="section-toolbar payroll-detail-section">
+        <h2>Créditos de consumo (excedente a nómina)</h2>
       </div>
       <div class="table-wrap">
         <table class="data-table">
@@ -63,10 +69,22 @@
           <tbody id="payroll-detail-creditos-tbody"></tbody>
         </table>
       </div>
-      <div class="section-toolbar" style="margin-top:16px;">
-        <h2 style="font-size:0.95rem;">Faltas</h2>
+
+      <div class="section-toolbar payroll-detail-section">
+        <h2>Beneficio de empleado ($100/día) consumido</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Fecha</th><th>Monto usado</th></tr></thead>
+          <tbody id="payroll-detail-beneficio-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="section-toolbar payroll-detail-section">
+        <h2>Faltas</h2>
       </div>
       <div id="payroll-detail-faltas"></div>
+
       <div class="modal-actions">
         <button class="btn btn-outline" id="btn-close-detail">Cerrar</button>
       </div>
