@@ -762,7 +762,7 @@ function renderProducts() {
     .join('');
 
   productsGrid.querySelectorAll('.product-card').forEach((card) => {
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (ev) => {
       const product = allProducts.find(
         (p) => p.id === Number(card.dataset.id)
       );
@@ -788,11 +788,25 @@ function renderProducts() {
         return;
       }
 
+      // Shift+clic: pregunta la cantidad de un jalón (p.ej. 50 alitas sin
+      // dar 50 clics). Sin Shift, usa el buffer numérico tecleado antes del
+      // clic si hay uno pendiente (ver qtyBufferConsume en common.js).
+      let qty = 1;
+      if (ev.shiftKey) {
+        const answer = window.prompt(`¿Cuántos "${product.name}" quieres agregar?`, '1');
+        if (answer === null) return;
+        qty = Math.max(1, Math.min(999, parseInt(answer, 10) || 1));
+      } else if (window.qtyBufferConsume) {
+        const buffered = window.qtyBufferConsume();
+        if (buffered) qty = buffered;
+      }
+
       addToOrder({
         id: product.id,
         name: product.name,
         itemType: 'product',
-        price: product.price
+        price: product.price,
+        quantity: qty
       });
     });
   });
@@ -1070,7 +1084,26 @@ async function addToOrder(item) {
 // RENDERIZAR CARRITO
 // ==========================================================================
 
+let lastFocusedQtyIndex = null; // índice en currentItems[] del último input de cantidad enfocado -- ver window.__whQtyHooks
+
 function renderCart(total) {
+  // La comanda se refresca sola cada AUTO_REFRESH_MS: si se reconstruye el
+  // DOM mientras el cajero está a mitad de teclear una cantidad a mano, le
+  // borra lo que llevaba escrito. Mientras el input de cantidad tenga foco,
+  // solo se actualiza el total y se deja el resto de la comanda como está;
+  // en cuanto se suelta el foco (blur/Enter ya manda el valor), el próximo
+  // refresh vuelve a pintar todo con normalidad.
+  const activeQtyInput = document.activeElement;
+  if (
+    activeQtyInput &&
+    activeQtyInput.classList &&
+    activeQtyInput.classList.contains('qty-input') &&
+    cartItemsContainer.contains(activeQtyInput)
+  ) {
+    totalEl.textContent = fmt(total);
+    return;
+  }
+
   if (currentItems.length === 0) {
     cartItemsContainer.innerHTML = `
       <div class="cart-empty-state">
@@ -1080,7 +1113,7 @@ function renderCart(total) {
     `;
   } else {
     cartItemsContainer.innerHTML = currentItems
-      .map((item) => {
+      .map((item, index) => {
         const product =
           item.item_type === 'product'
             ? allProducts.find(
@@ -1145,25 +1178,48 @@ function renderCart(total) {
 
               <button
                 class="btn-qty btn-minus"
-                data-id="${item.id}"
+                data-index="${index}"
               >
                 −
               </button>
 
-              <span>
-                ${item.quantity}
-              </span>
+              <input
+                type="number"
+                class="qty-input"
+                min="1"
+                max="999"
+                value="${item.quantity}"
+                data-index="${index}"
+              >
 
               <button
                 class="btn-qty btn-plus"
-                data-id="${item.id}"
+                data-index="${index}"
               >
                 +
               </button>
 
               <button
+                class="qty-fast-btn"
+                data-index="${index}"
+                data-delta="5"
+                title="Agregar 5 (Ctrl++)"
+              >
+                +5
+              </button>
+
+              <button
+                class="qty-fast-btn"
+                data-index="${index}"
+                data-delta="10"
+                title="Agregar 10 de un jalón"
+              >
+                +10
+              </button>
+
+              <button
                 class="btn-remove"
-                data-id="${item.id}"
+                data-index="${index}"
                 title="Quitar"
               >
                 ✕
@@ -1176,30 +1232,68 @@ function renderCart(total) {
       .join('');
 
     // --------------------------------------------------------------
-    // BOTÓN MENOS
+    // BOTÓN MENOS / MÁS / +5 / +10
     // --------------------------------------------------------------
     cartItemsContainer
       .querySelectorAll('.btn-minus')
       .forEach((b) => {
-        b.addEventListener('click', () => {
-          changeQty(
-            Number(b.dataset.id),
-            -1
-          );
-        });
+        b.addEventListener('click', () => addQuantity(Number(b.dataset.index), -1));
       });
 
-    // --------------------------------------------------------------
-    // BOTÓN MÁS
-    // --------------------------------------------------------------
     cartItemsContainer
       .querySelectorAll('.btn-plus')
       .forEach((b) => {
-        b.addEventListener('click', () => {
-          changeQty(
-            Number(b.dataset.id),
-            1
-          );
+        b.addEventListener('click', () => addQuantity(Number(b.dataset.index), 1));
+      });
+
+    cartItemsContainer
+      .querySelectorAll('.qty-fast-btn')
+      .forEach((b) => {
+        b.addEventListener('click', () => addQuantity(Number(b.dataset.index), Number(b.dataset.delta)));
+      });
+
+    // --------------------------------------------------------------
+    // INPUT DE CANTIDAD EDITABLE
+    // --------------------------------------------------------------
+    cartItemsContainer
+      .querySelectorAll('.qty-input')
+      .forEach((input) => {
+        const idx = Number(input.dataset.index);
+        input.addEventListener('click', () => input.select());
+        input.addEventListener('focus', () => {
+          lastFocusedQtyIndex = idx;
+          input.select();
+        });
+        input.addEventListener('change', () => updateQtyDirect(idx, input.value));
+        input.addEventListener('blur', () => updateQtyDirect(idx, input.value));
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            updateQtyDirect(idx, input.value);
+            input.blur();
+          }
+        });
+        input.addEventListener('dblclick', () => {
+          // Sin este blur, el input sigue "enfocado" mientras el teclado
+          // numérico está abierto -- el guard de renderCart (arriba) se
+          // saltaría el repintado tras confirmar y dejaría la cantidad vieja
+          // en pantalla hasta el siguiente refresh automático.
+          input.blur();
+          // Recaptura el id real del artículo: la comanda se refresca sola
+          // cada pocos segundos (otra estación puede tocarla mientras el
+          // teclado numérico está abierto), así que al confirmar se vuelve a
+          // buscar por id en vez de confiar ciegamente en que el índice
+          // capturado al abrir el modal siga apuntando al mismo renglón.
+          const itemId = currentItems[idx] ? currentItems[idx].id : null;
+          if (itemId == null) return;
+          openQtyKeypad(currentItems[idx].quantity, (val) => {
+            const freshIndex = currentItems.findIndex((i) => i.id === itemId);
+            if (freshIndex === -1) {
+              toast('Ese producto ya no está en la comanda.', 'error');
+              return;
+            }
+            updateQtyDirect(freshIndex, val);
+          });
         });
       });
 
@@ -1209,26 +1303,7 @@ function renderCart(total) {
     cartItemsContainer
       .querySelectorAll('.btn-remove')
       .forEach((b) => {
-        b.addEventListener('click', async () => {
-          try {
-            await window.comandasAPI.removeItem(
-              Number(b.dataset.id)
-            );
-
-            await refreshOrder();
-            refreshAvailability();
-
-          } catch (err) {
-            console.error(err);
-
-            toast(
-              err && err.message
-                ? err.message
-                : 'No se pudo eliminar el producto.',
-              'error'
-            );
-          }
-        });
+        b.addEventListener('click', () => removeAtIndex(Number(b.dataset.index)));
       });
   }
 
@@ -1236,28 +1311,24 @@ function renderCart(total) {
 }
 
 // ==========================================================================
-// CAMBIAR CANTIDAD
+// CAMBIAR CANTIDAD -- por índice en currentItems[] (estable entre el clic y
+// el siguiente render, igual que en sales-renderer.js). comandaUpdateItemQty
+// recibe la cantidad ABSOLUTA, así que setQuantity manda item.id + qty tal
+// cual; addQuantity solo calcula el delta antes de llamarla.
 // ==========================================================================
 
-async function changeQty(itemId, delta) {
-  const item = currentItems.find(
-    (i) => i.id === itemId
-  );
-
+async function setQuantity(index, qty) {
+  const item = currentItems[index];
   if (!item) return;
 
-  const newQty =
-    item.quantity + delta;
+  qty = Math.floor(Number(qty));
+  if (!Number.isFinite(qty) || qty < 1) qty = 1;
+  if (qty > 999) qty = 999;
 
   try {
-    await window.comandasAPI.updateItemQty(
-      itemId,
-      newQty
-    );
-
+    await window.comandasAPI.updateItemQty(item.id, qty);
     await refreshOrder();
     refreshAvailability();
-
   } catch (err) {
     console.error(err);
 
@@ -1269,12 +1340,65 @@ async function changeQty(itemId, delta) {
     );
 
     catalogLoaded = false;
-
     await ensureCatalog();
-
     renderProducts();
   }
 }
+
+async function removeAtIndex(index) {
+  const item = currentItems[index];
+  if (!item) return;
+
+  try {
+    await window.comandasAPI.removeItem(item.id);
+    await refreshOrder();
+    refreshAvailability();
+  } catch (err) {
+    console.error(err);
+
+    toast(
+      err && err.message
+        ? err.message
+        : 'No se pudo eliminar el producto.',
+      'error'
+    );
+  }
+}
+
+// A diferencia de setQuantity, un delta negativo que llega a 0 quita el item
+// (mismo comportamiento que tenía el botón "-" antes de este cambio).
+async function addQuantity(index, delta) {
+  const item = currentItems[index];
+  if (!item) return;
+
+  const newQty = item.quantity + delta;
+  if (newQty <= 0) {
+    await removeAtIndex(index);
+    return;
+  }
+  await setQuantity(index, newQty);
+}
+
+function updateQtyDirect(index, newVal) {
+  setQuantity(index, newVal);
+}
+
+// Atajos de teclado +/- sobre "el item seleccionado" (ver common.js): el
+// input de cantidad con foco cuenta como seleccionado; si ninguno tiene
+// foco, se usa el último item agregado. Enter con buffer numérico pendiente
+// aplica esa cantidad al último item agregado.
+window.__whQtyHooks = {
+  adjustSelected(delta) {
+    const idx = lastFocusedQtyIndex != null && currentItems[lastFocusedQtyIndex] ? lastFocusedQtyIndex : currentItems.length - 1;
+    if (idx < 0 || !currentItems[idx]) return;
+    addQuantity(idx, delta);
+  },
+  applyToLast(qty) {
+    const idx = currentItems.length - 1;
+    if (idx < 0) return;
+    setQuantity(idx, qty);
+  }
+};
 
 // ==========================================================================
 // CANCELAR MESA

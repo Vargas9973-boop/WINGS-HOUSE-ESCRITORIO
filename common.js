@@ -114,7 +114,10 @@ const SHORTCUTS_HELP = [
   ['Ctrl+N', 'Nueva venta / nuevo insumo, según la pantalla'],
   ['Ctrl+S', 'Guardar el formulario abierto'],
   ['Alt+C', 'Cobrar la venta actual (Comandas)'],
-  ['Esc', 'Cerrar el modal abierto / cancelar']
+  ['Esc', 'Cerrar el modal abierto / cancelar'],
+  ['+ / -', 'Sumar/restar 1 a la cantidad del item seleccionado en Orden Actual'],
+  ['Ctrl + / Ctrl -', 'Sumar/restar 10 a la cantidad del item seleccionado'],
+  ['0-9 y Enter', 'Teclear una cantidad y Enter la aplica al último producto agregado']
 ];
 
 function ensureShortcutsModalStyles() {
@@ -202,6 +205,139 @@ function closeShortcutsModal() {
   document.getElementById('shortcuts-modal-overlay')?.classList.remove('show');
 }
 
+// ==========================================================================
+// BUFFER DE CANTIDAD POR TECLADO -- usado en Ventas/Comandas para agregar
+// varias unidades de un jalón: teclear "50" y luego hacer clic en un
+// producto (o Enter, ver más abajo) agrega/ajusta 50 en vez de 1. El buffer
+// expira solo tras QTY_BUFFER_TIMEOUT_MS de inactividad para no quedar
+// "pegado" a un número tecleado hace rato por error.
+// ==========================================================================
+const QTY_BUFFER_TIMEOUT_MS = 1500;
+let __qtyBuffer = '';
+let __qtyBufferTimer = null;
+
+function qtyBufferIndicatorEl() {
+  return document.getElementById('qty-buffer-indicator');
+}
+
+function renderQtyBufferIndicator() {
+  let el = qtyBufferIndicatorEl();
+  if (!__qtyBuffer) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'qty-buffer-indicator';
+    document.body.appendChild(el);
+  }
+  el.textContent = `Cantidad: ${__qtyBuffer} — clic en un producto o Enter`;
+}
+
+function qtyBufferPush(digit) {
+  clearTimeout(__qtyBufferTimer);
+  __qtyBuffer = (__qtyBuffer + digit).slice(-3); // tope natural: máx 999
+  __qtyBufferTimer = setTimeout(() => {
+    __qtyBuffer = '';
+    renderQtyBufferIndicator();
+  }, QTY_BUFFER_TIMEOUT_MS);
+  renderQtyBufferIndicator();
+}
+
+// Lee el buffer sin consumirlo (por si algún día se necesita solo mostrarlo).
+function qtyBufferPeek() {
+  const n = parseInt(__qtyBuffer, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(999, n) : null;
+}
+
+function qtyBufferConsume() {
+  const n = qtyBufferPeek();
+  __qtyBuffer = '';
+  clearTimeout(__qtyBufferTimer);
+  renderQtyBufferIndicator();
+  return n;
+}
+window.qtyBufferConsume = qtyBufferConsume;
+
+// ==========================================================================
+// TECLADO NUMÉRICO EN PANTALLA PARA CANTIDAD (doble clic en el input de
+// cantidad del carrito) -- pensado para pantallas táctiles, donde escribir
+// con un teclado de verdad no siempre es cómodo. sales-renderer.js y
+// comandas-renderer.js llaman a openQtyKeypad(cantidadActual, callback);
+// el callback recibe la cantidad final ya validada (1-999) solo si se
+// confirma con OK.
+// ==========================================================================
+function ensureQtyKeypadModal() {
+  let overlay = document.getElementById('qty-keypad-overlay');
+  if (overlay) return overlay;
+  overlay = document.createElement('div');
+  overlay.id = 'qty-keypad-overlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-content qty-keypad-box">
+      <h3>Cantidad</h3>
+      <div id="qty-keypad-display" class="qty-keypad-display">1</div>
+      <div class="qty-keypad-grid">
+        ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button type="button" class="qty-keypad-key" data-key="${n}">${n}</button>`).join('')}
+        <button type="button" class="qty-keypad-key qty-keypad-clear" data-key="C">C</button>
+        <button type="button" class="qty-keypad-key" data-key="0">0</button>
+        <button type="button" class="qty-keypad-key qty-keypad-ok" data-key="OK">OK</button>
+      </div>
+      <button type="button" class="qty-keypad-cancel" id="qty-keypad-cancel">Cancelar</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeQtyKeypad(); });
+  overlay.querySelector('#qty-keypad-cancel').addEventListener('click', closeQtyKeypad);
+  overlay.querySelectorAll('.qty-keypad-key').forEach((btn) => {
+    btn.addEventListener('click', () => handleQtyKeypadKey(btn.dataset.key));
+  });
+  return overlay;
+}
+
+let __qtyKeypadValue = '';
+let __qtyKeypadCallback = null;
+
+function openQtyKeypad(initialQty, onConfirm) {
+  ensureQtyKeypadModal();
+  __qtyKeypadValue = String(Math.max(1, Math.min(999, Math.floor(Number(initialQty)) || 1)));
+  __qtyKeypadCallback = onConfirm;
+  document.getElementById('qty-keypad-display').textContent = __qtyKeypadValue;
+  document.getElementById('qty-keypad-overlay').classList.add('show');
+}
+window.openQtyKeypad = openQtyKeypad;
+
+function closeQtyKeypad() {
+  document.getElementById('qty-keypad-overlay')?.classList.remove('show');
+  __qtyKeypadCallback = null;
+}
+
+function handleQtyKeypadKey(key) {
+  const display = document.getElementById('qty-keypad-display');
+  if (key === 'C') {
+    __qtyKeypadValue = '';
+  } else if (key === 'OK') {
+    const qty = Math.max(1, Math.min(999, parseInt(__qtyKeypadValue, 10) || 1));
+    const cb = __qtyKeypadCallback;
+    closeQtyKeypad();
+    if (cb) cb(qty);
+    return;
+  } else {
+    if (__qtyKeypadValue.length >= 3) return;
+    __qtyKeypadValue = __qtyKeypadValue === '0' ? key : __qtyKeypadValue + key;
+  }
+  display.textContent = __qtyKeypadValue || '0';
+}
+
+// ==========================================================================
+// GANCHO PARA +/- DE TECLADO SOBRE "ORDEN ACTUAL" -- sales-renderer.js y
+// comandas-renderer.js llenan esto con { adjustSelected(delta), applyToLast(qty) }
+// una vez que conocen su propio carrito (cart[] local vs currentItems[] del
+// servidor). Si la pantalla actual no define el gancho (p.ej. cualquier otro
+// módulo que también cargue common.js), las teclas simplemente no hacen nada.
+// ==========================================================================
+window.__whQtyHooks = window.__whQtyHooks || null;
+
 // Reimprime el último ticket cobrado en ESTA ventana (window.__lastSaleId,
 // lo pone comandas-renderer.js/sales-renderer.js al cerrar una venta). No
 // hay un concepto de "último ticket" a nivel de app -- es deliberadamente
@@ -263,6 +399,38 @@ if (!window.__whShortcutsInit) {
       if (saveBtn) saveBtn.click();
       window.dispatchEvent(new CustomEvent('app-shortcut', { detail: 'Ctrl+S' }));
       return;
+    }
+
+    // +/- de cantidad sobre el item "seleccionado" en Orden Actual (el que
+    // tiene el foco en su input de cantidad, o si no hay ninguno, el último
+    // agregado -- lo decide el gancho de cada pantalla). A diferencia de los
+    // combos de letra de abajo, SÍ deben funcionar con el input de cantidad
+    // enfocado (typing=true), que es justo el caso de uso normal.
+    const isQtyPlus = e.key === '+' || e.code === 'NumpadAdd';
+    const isQtyMinus = e.key === '-' || e.code === 'NumpadSubtract';
+    if ((isQtyPlus || isQtyMinus) && window.__whQtyHooks) {
+      e.preventDefault();
+      const delta = (isQtyPlus ? 1 : -1) * (e.ctrlKey ? 10 : 1);
+      window.__whQtyHooks.adjustSelected(delta);
+      return;
+    }
+
+    // Buffer de cantidad: dígitos tecleados SIN estar escribiendo en ningún
+    // input (p.ej. con el catálogo enfocado) se acumulan para "50 + clic en
+    // el producto"; Enter con buffer pendiente lo aplica al último producto
+    // agregado. Ver qtyBufferPush/qtyBufferConsume más arriba.
+    if (!typing && window.__whQtyHooks && /^[0-9]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      qtyBufferPush(e.key);
+      return;
+    }
+
+    if (!typing && e.key === 'Enter' && window.__whQtyHooks) {
+      const qty = qtyBufferConsume();
+      if (qty != null) {
+        e.preventDefault();
+        window.__whQtyHooks.applyToLast(qty);
+        return;
+      }
     }
 
     // El resto de combos con letra (Ctrl+K/Ctrl+N/Alt+C) se ignoran

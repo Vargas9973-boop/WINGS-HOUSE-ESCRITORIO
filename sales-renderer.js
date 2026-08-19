@@ -16,6 +16,7 @@ let cart = [];
 let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
 let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
+let lastFocusedQtyIndex = null; // índice en cart[] del último input de cantidad enfocado -- ver window.__whQtyHooks más abajo
 
 // Semáforo de disponibilidad por producto a partir de recipes+inventory
 // (window.db.recipes.getAllWithStock). Copia de common.js: sales.html no
@@ -624,7 +625,7 @@ function renderProducts() {
     .join('');
 
   productsGrid.querySelectorAll('.product-card').forEach((card) => {
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (ev) => {
       const product = allProducts.find((p) => p.id === Number(card.dataset.id));
       if (!product) return;
       if (product.stock != null && product.stock <= 0) {
@@ -641,6 +642,20 @@ function renderProducts() {
         );
         return;
       }
+
+      // Shift+clic: pregunta la cantidad de un jalón (p.ej. 50 alitas sin
+      // dar 50 clics). Sin Shift, usa el buffer numérico tecleado antes del
+      // clic si hay uno pendiente (ver qtyBufferConsume en common.js).
+      let qty = 1;
+      if (ev.shiftKey) {
+        const answer = window.prompt(`¿Cuántos "${product.name}" quieres agregar?`, '1');
+        if (answer === null) return;
+        qty = Math.max(1, Math.min(999, parseInt(answer, 10) || 1));
+      } else if (window.qtyBufferConsume) {
+        const buffered = window.qtyBufferConsume();
+        if (buffered) qty = buffered;
+      }
+
       addToCart({
         id: product.id,
         name: product.name,
@@ -648,7 +663,7 @@ function renderProducts() {
         basePrice: product.price,
         employeePrice: product.employee_price,
         stock: product.stock
-      });
+      }, qty);
     });
   });
 }
@@ -688,58 +703,103 @@ function stockFor(id) {
   return product ? product.stock : null;
 }
 
-function addToCart(item) {
+function addToCart(item, qty = 1) {
+  qty = Math.max(1, Math.min(999, Math.floor(Number(qty)) || 1));
   const existing = cart.find((i) => i.id === item.id && i.itemType === item.itemType);
   const currentQty = existing ? existing.quantity : 0;
   const stock = item.itemType === 'product' ? stockFor(item.id) : null;
 
-  if (stock != null && currentQty + 1 > stock) {
+  if (stock != null && currentQty + qty > stock) {
     toast(`Solo quedan ${stock} en existencia de "${item.name}".`, 'error');
-    return;
+    qty = stock - currentQty;
+    if (qty <= 0) return;
   }
 
   const avail = item.itemType === 'product' ? productAvailability[item.id] : null;
-  if (avail && avail.maxSellable != null && currentQty + 1 > avail.maxSellable) {
+  if (avail && avail.maxSellable != null && currentQty + qty > avail.maxSellable) {
     toast(`Solo alcanza el insumo para ${avail.maxSellable} de "${item.name}".`, 'error');
-    return;
+    qty = avail.maxSellable - currentQty;
+    if (qty <= 0) return;
   }
 
   if (existing) {
-    existing.quantity += 1;
+    existing.quantity += qty;
   } else {
-    cart.push({ ...item, quantity: 1 });
+    cart.push({ ...item, quantity: qty });
   }
   renderCart();
 }
 
-function updateQuantity(id, itemType, delta) {
-  const item = cart.find((i) => i.id === id && i.itemType === itemType);
+// ==========================================================================
+// CANTIDAD POR ÍNDICE -- reemplaza al viejo updateQuantity(id,itemType,delta):
+// el índice en cart[] es estable entre renders (cart solo cambia al agregar/
+// quitar, siempre seguido de un renderCart() que reconstruye los índices de
+// los botones/inputs), y es lo que necesitan tanto el input editable como
+// los botones +5/+10 y el teclado numérico.
+// ==========================================================================
+function setQuantity(index, qty) {
+  const item = cart[index];
   if (!item) return;
+  qty = Math.floor(Number(qty));
+  if (!Number.isFinite(qty) || qty < 1) qty = 1;
+  if (qty > 999) qty = 999;
 
-  if (delta > 0 && itemType === 'product') {
-    const stock = stockFor(id);
-    if (stock != null && item.quantity + delta > stock) {
+  if (item.itemType === 'product') {
+    const stock = stockFor(item.id);
+    if (stock != null && qty > stock) {
       toast(`Solo quedan ${stock} en existencia de "${item.name}".`, 'error');
-      return;
+      qty = Math.max(1, stock);
     }
-    const avail = productAvailability[id];
-    if (avail && avail.maxSellable != null && item.quantity + delta > avail.maxSellable) {
+    const avail = productAvailability[item.id];
+    if (avail && avail.maxSellable != null && qty > avail.maxSellable) {
       toast(`Solo alcanza el insumo para ${avail.maxSellable} de "${item.name}".`, 'error');
-      return;
+      qty = Math.max(1, avail.maxSellable);
     }
   }
 
-  item.quantity += delta;
-  if (item.quantity <= 0) {
-    cart = cart.filter((i) => !(i.id === id && i.itemType === itemType));
-  }
+  item.quantity = qty;
   renderCart();
 }
 
-function removeFromCart(id, itemType) {
-  cart = cart.filter((i) => !(i.id === id && i.itemType === itemType));
+// A diferencia de setQuantity, un delta negativo que llega a 0 quita el item
+// (mismo comportamiento que tenía el botón "-" antes de este cambio).
+function addQuantity(index, delta) {
+  const item = cart[index];
+  if (!item) return;
+  const newQty = item.quantity + delta;
+  if (newQty <= 0) {
+    removeAtIndex(index);
+    return;
+  }
+  setQuantity(index, newQty);
+}
+
+function updateQtyDirect(index, newVal) {
+  setQuantity(index, newVal);
+}
+
+function removeAtIndex(index) {
+  if (!cart[index]) return;
+  cart.splice(index, 1);
   renderCart();
 }
+
+// Atajos de teclado +/- sobre "el item seleccionado" (ver common.js): el
+// input de cantidad con foco cuenta como seleccionado; si ninguno tiene
+// foco, se usa el último item agregado. Enter con buffer numérico pendiente
+// aplica esa cantidad al último item agregado.
+window.__whQtyHooks = {
+  adjustSelected(delta) {
+    const idx = lastFocusedQtyIndex != null && cart[lastFocusedQtyIndex] ? lastFocusedQtyIndex : cart.length - 1;
+    if (idx < 0 || !cart[idx]) return;
+    addQuantity(idx, delta);
+  },
+  applyToLast(qty) {
+    const idx = cart.length - 1;
+    if (idx < 0) return;
+    setQuantity(idx, qty);
+  }
+};
 
 function effectivePrice(item) {
   if (item.itemType === 'promo') return item.basePrice;
@@ -765,7 +825,7 @@ function renderCart() {
 
   btnCheckout.disabled = false;
   cartItemsContainer.innerHTML = cart
-    .map((item) => {
+    .map((item, index) => {
       const price = effectivePrice(item);
       const stock = item.itemType === 'product' ? stockFor(item.id) : null;
       let stockLine = '';
@@ -783,10 +843,12 @@ function renderCart() {
           ${stockLine}
         </div>
         <div class="cart-item-controls">
-          <button class="btn-qty btn-minus" data-id="${item.id}" data-type="${item.itemType}">−</button>
-          <span>${item.quantity}</span>
-          <button class="btn-qty btn-plus" data-id="${item.id}" data-type="${item.itemType}">+</button>
-          <button class="btn-remove" data-id="${item.id}" data-type="${item.itemType}" title="Quitar">✕</button>
+          <button class="btn-qty btn-minus" data-index="${index}">−</button>
+          <input type="number" class="qty-input" min="1" max="999" value="${item.quantity}" data-index="${index}">
+          <button class="btn-qty btn-plus" data-index="${index}">+</button>
+          <button class="qty-fast-btn" data-index="${index}" data-delta="5" title="Agregar 5 (Ctrl++)">+5</button>
+          <button class="qty-fast-btn" data-index="${index}" data-delta="10" title="Agregar 10 de un jalón">+10</button>
+          <button class="btn-remove" data-index="${index}" title="Quitar">✕</button>
         </div>
       </div>
     `;
@@ -794,13 +856,37 @@ function renderCart() {
     .join('');
 
   cartItemsContainer.querySelectorAll('.btn-minus').forEach((b) => {
-    b.addEventListener('click', () => updateQuantity(Number(b.dataset.id), b.dataset.type, -1));
+    b.addEventListener('click', () => addQuantity(Number(b.dataset.index), -1));
   });
   cartItemsContainer.querySelectorAll('.btn-plus').forEach((b) => {
-    b.addEventListener('click', () => updateQuantity(Number(b.dataset.id), b.dataset.type, 1));
+    b.addEventListener('click', () => addQuantity(Number(b.dataset.index), 1));
+  });
+  cartItemsContainer.querySelectorAll('.qty-fast-btn').forEach((b) => {
+    b.addEventListener('click', () => addQuantity(Number(b.dataset.index), Number(b.dataset.delta)));
   });
   cartItemsContainer.querySelectorAll('.btn-remove').forEach((b) => {
-    b.addEventListener('click', () => removeFromCart(Number(b.dataset.id), b.dataset.type));
+    b.addEventListener('click', () => removeAtIndex(Number(b.dataset.index)));
+  });
+  cartItemsContainer.querySelectorAll('.qty-input').forEach((input) => {
+    const idx = Number(input.dataset.index);
+    input.addEventListener('click', () => input.select());
+    input.addEventListener('focus', () => {
+      lastFocusedQtyIndex = idx;
+      input.select();
+    });
+    input.addEventListener('change', () => updateQtyDirect(idx, input.value));
+    input.addEventListener('blur', () => updateQtyDirect(idx, input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        updateQtyDirect(idx, input.value);
+        input.blur();
+      }
+    });
+    input.addEventListener('dblclick', () => {
+      input.blur();
+      openQtyKeypad(cart[idx] ? cart[idx].quantity : 1, (val) => updateQtyDirect(idx, val));
+    });
   });
 
   updateCartSummary();
