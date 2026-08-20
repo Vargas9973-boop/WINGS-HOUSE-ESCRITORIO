@@ -95,8 +95,11 @@ function renderModifiers() {
   }
 
   tbody.innerHTML = modifiers
-    .map(
-      (m) => `
+    .map((m) => {
+      const unit = m.inventory ? m.inventory.unit || '' : '';
+      const qtyNeeded = Number(m.qty_needed) || 60;
+      const portionsLeft = m.inventory && qtyNeeded > 0 ? Math.floor(Number(m.inventory.stock) / qtyNeeded) : null;
+      return `
     <tr>
       <td>${escapeHtml(m.name)}</td>
       <td>${escapeHtml(m.group_name)}</td>
@@ -112,11 +115,16 @@ function renderModifiers() {
         </select>
       </td>
       <td>
+        <input type="number" class="modifier-qty-input" data-id="${m.id}" value="${qtyNeeded}" min="0.01" step="0.01" style="width:80px;">
+        ${unit ? escapeHtml(unit) : ''}
+        ${portionsLeft != null ? `<div style="color:var(--text-muted); font-size:0.75rem;">≈ ${portionsLeft} porciones restantes</div>` : ''}
+      </td>
+      <td>
         <button class="btn btn-outline btn-sm" data-save-modifier="${m.id}">Guardar</button>
       </td>
     </tr>
-  `
-    )
+  `;
+    })
     .join('');
 
   tbody.querySelectorAll('[data-save-modifier]').forEach((b) => {
@@ -126,9 +134,11 @@ function renderModifiers() {
 
 async function saveModifierInventory(id) {
   const select = document.querySelector(`.modifier-inventory-select[data-id="${id}"]`);
+  const qtyInput = document.querySelector(`.modifier-qty-input[data-id="${id}"]`);
   const inventoryId = select.value ? Number(select.value) : null;
+  const qtyNeeded = Number(qtyInput.value) || 60;
   try {
-    await window.db.modifiers.update(id, { inventory_id: inventoryId });
+    await window.db.modifiers.update(id, { inventory_id: inventoryId, qty_needed: qtyNeeded });
     toast('Modificador actualizado.', 'success');
     await loadModifiersData();
     renderModifiers();

@@ -970,9 +970,9 @@ async function comandaAddItem(saleId, item) {
 // renglón nuevo en sale_items (no intenta fusionar cantidad con un renglón
 // existente del mismo producto): dos elecciones de salsa distintas deben
 // verse como líneas separadas en el ticket. El descuento de inventario de
-// cada salsa (60 * cantidad) lo hace trg_sale_item_modifiers_after_insert
-// automáticamente al insertar en sale_item_modifiers -- aquí no se toca
-// inventory directamente.
+// cada salsa (modifiers.qty_needed * cantidad) lo hace
+// trg_sale_item_modifiers_after_insert automáticamente al insertar en
+// sale_item_modifiers -- aquí no se toca inventory directamente.
 async function comandaAddItemWithModifiers(saleId, productId, qty, modifierIds) {
   const { data: product, error: prodErr } = await supabase.from('products').select('*').eq('id', productId).single();
   must(prodErr, 'Producto no encontrado');
@@ -1014,7 +1014,7 @@ async function comandaAddItemWithModifiers(saleId, productId, qty, modifierIds) 
 // sin él, trae todos los modificadores de todos los grupos (usado por la
 // pantalla de administración de catálogo).
 async function getModifiers(groupName) {
-  let query = supabase.from('modifiers').select('*, inventory!inner(stock)');
+  let query = supabase.from('modifiers').select('*, inventory!inner(stock, unit)');
   if (groupName) query = query.eq('group_name', groupName);
   const { data, error } = await query.order('name');
   must(error, 'No se pudieron obtener los modificadores');
@@ -1026,6 +1026,10 @@ async function updateModifier(id, data) {
   if (data.name !== undefined) update.name = data.name;
   if (data.inventory_id !== undefined) update.inventory_id = data.inventory_id;
   if (data.price_extra !== undefined) update.price_extra = data.price_extra != null ? Number(data.price_extra) : null;
+  // Cuánto de su insumo consume una porción, en la unidad propia de ese
+  // insumo (ver inventory.unit) -- nunca se convierte, igual que
+  // recipes.quantity_needed (20260819090200_salsa_stock_real.sql).
+  if (data.qty_needed !== undefined) update.qty_needed = Math.max(0.01, Number(data.qty_needed) || 60);
 
   const { data: row, error } = await supabase.from('modifiers').update(update).eq('id', id).select().single();
   must(error, 'No se pudo actualizar el modificador');

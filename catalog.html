@@ -91,7 +91,9 @@
           <h2>Modificadores (salsas)</h2>
         </div>
         <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
-          Vincula cada salsa con su insumo de inventario. El descuento de existencia (60 por venta) lo hace un disparador automático en la base de datos al agregar la salsa a una comanda.
+          Vincula cada salsa con su insumo de inventario e indica cuánto de ese insumo consume una porción, en la
+          unidad propia del insumo (p.ej. si el insumo está en gramos, aquí van gramos). El descuento de existencia lo
+          hace un disparador automático en la base de datos al agregar la salsa a una comanda.
         </p>
         <div class="table-wrap">
           <table class="data-table">
@@ -100,6 +102,7 @@
                 <th>Salsa</th>
                 <th>Grupo</th>
                 <th>Insumo vinculado</th>
+                <th>Cantidad por porción</th>
                 <th></th>
               </tr>
             </thead>
