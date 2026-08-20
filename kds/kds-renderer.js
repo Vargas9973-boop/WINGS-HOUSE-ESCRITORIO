@@ -66,7 +66,12 @@ function cardHtml(order) {
   }
 
   const itemsHtml = (order.items || []).length
-    ? order.items.map((it) => `<div>${it.quantity}x ${escapeHtml(it.name)}</div>`).join('')
+    ? order.items.map((it) => {
+        const modifiersHtml = (it.modifiers || [])
+          .map((name) => `<span class="item-modifier">${escapeHtml(name.toUpperCase())}</span>`)
+          .join('');
+        return `<div class="item-line">${it.quantity}x ${escapeHtml(it.name)}${modifiersHtml ? `<br>${modifiersHtml}` : ''}</div>`;
+      }).join('')
     : '<div style="opacity:.6">Sin artículos</div>';
 
   const action = order.kdsStatus === 'nueva'

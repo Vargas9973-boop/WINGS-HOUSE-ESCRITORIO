@@ -218,7 +218,12 @@ function openTicketModal(rowId) {
   document.getElementById('hist-ticket-title').textContent = `Ticket ${row.folio || ''}`;
 
   const itemsHtml = row.items && row.items.length
-    ? row.items.map((it) => `<div class="ticket-row"><span>${it.quantity}x ${escapeHtmlHist(it.name)}</span><span>${fmtMoney(it.subtotal)}</span></div>`).join('')
+    ? row.items.map((it) => {
+        const modifiersHtml = (it.modifiers || [])
+          .map((name) => `<div style="color:#f97316;font-size:12px;font-weight:700;padding-left:8px;">• ${escapeHtmlHist(name)}</div>`)
+          .join('');
+        return `<div class="ticket-row"><span>${it.quantity}x ${escapeHtmlHist(it.name)}</span><span>${fmtMoney(it.subtotal)}</span></div>${modifiersHtml}`;
+      }).join('')
     : `<div class="empty-state">Sin artículos.</div>`;
 
   const extraHtml = row.tipo === 'domicilio'

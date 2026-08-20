@@ -448,6 +448,40 @@ async function createSale(payload, openedBy, cashierId) {
 
   must(error, 'No se pudo registrar la venta');
 
+  // Salsas elegidas en mostrador (ver sales-renderer.js/showSauceSelector):
+  // process_sale no conoce sale_item_modifiers, así que se ligan aparte una
+  // vez que ya existen los sale_items reales, igual que
+  // comandaAddItemWithModifiers hace para comandas, sin tocar el RPC (863
+  // líneas, frágil). process_sale inserta un renglón por elemento de
+  // p_items, en el mismo orden del arreglo (ver bucle FOR ... IN
+  // jsonb_array_elements(p_items) en 20260815070100_process_sale_persist_benefit.sql),
+  // así que a los sale_items recién creados, ordenados por id, les
+  // corresponde -- en ese mismo orden -- cada elemento de payload.items.
+  const itemsWithModifiers = payload.items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => Array.isArray(item.modifierIds) && item.modifierIds.length > 0);
+
+  if (itemsWithModifiers.length > 0) {
+    const { data: createdItems, error: createdItemsErr } = await supabase
+      .from('sale_items').select('id').eq('sale_id', data.id).order('id');
+    if (createdItemsErr) {
+      console.error('No se pudieron ligar las salsas elegidas:', createdItemsErr.message);
+    } else {
+      const modifierRows = [];
+      itemsWithModifiers.forEach(({ item, index }) => {
+        const saleItem = createdItems[index];
+        if (!saleItem) return;
+        item.modifierIds.forEach((modifierId) => {
+          modifierRows.push({ sale_item_id: saleItem.id, modifier_id: modifierId });
+        });
+      });
+      if (modifierRows.length > 0) {
+        const { error: modErr } = await supabase.from('sale_item_modifiers').insert(modifierRows);
+        if (modErr) console.error('No se pudieron guardar las salsas elegidas:', modErr.message);
+      }
+    }
+  }
+
   // process_sale no recibe branch_id/cashier_user_id (branch_id ya se llena
   // solo por el DEFAULT de la columna); se completan aquí sin arriesgar la
   // función de cobro. Si esto falla no se revierte la venta ya cerrada,
@@ -496,7 +530,7 @@ async function getSaleById(id) {
   const { data: sale, error } = await supabase.from('sales').select('*').eq('id', id).maybeSingle();
   must(error, 'No se pudo obtener la venta');
   if (!sale) return null;
-  const { data: items, error: itErr } = await supabase.from('sale_items').select('*').eq('sale_id', id).order('id');
+  const { data: items, error: itErr } = await supabase.from('sale_items').select(SALE_ITEMS_WITH_MODIFIERS_SELECT).eq('sale_id', id).order('id');
   must(itErr);
 
   let employeeBenefitUsed = 0;
@@ -1104,7 +1138,7 @@ async function getKdsOrders() {
 
   const { data: items, error: itemsErr } = await supabase
     .from('sale_items')
-    .select('sale_id, name, quantity')
+    .select('sale_id, name, quantity, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
     .in('sale_id', sales.map((s) => s.id))
     .order('id', { ascending: true });
   must(itemsErr, 'No se pudieron obtener los artículos de las órdenes de cocina');
@@ -1112,7 +1146,10 @@ async function getKdsOrders() {
   const itemsBySale = {};
   (items || []).forEach((it) => {
     if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
-    itemsBySale[it.sale_id].push({ name: it.name, quantity: Number(it.quantity) || 0 });
+    const modifiers = (it.sale_item_modifiers || [])
+      .map((sim) => sim.modifiers?.name)
+      .filter(Boolean);
+    itemsBySale[it.sale_id].push({ name: it.name, quantity: Number(it.quantity) || 0, modifiers });
   });
 
   return sales.map((s) => ({
@@ -2345,12 +2382,15 @@ async function getUnifiedHistory(filters = {}) {
   if (saleIds.length > 0) {
     const { data: items, error: itemsErr } = await supabase
       .from('sale_items')
-      .select('sale_id, name, quantity, unit_price, subtotal')
+      .select('sale_id, name, quantity, unit_price, subtotal, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
       .in('sale_id', saleIds);
     must(itemsErr, 'No se pudo obtener el detalle de artículos del historial');
     (items || []).forEach((it) => {
       if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
-      itemsBySale[it.sale_id].push(it);
+      const modifiers = (it.sale_item_modifiers || [])
+        .map((sim) => sim.modifiers?.name)
+        .filter(Boolean);
+      itemsBySale[it.sale_id].push({ ...it, modifiers });
     });
   }
 

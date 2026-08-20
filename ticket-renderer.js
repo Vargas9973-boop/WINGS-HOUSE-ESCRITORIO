@@ -105,6 +105,13 @@ function renderTicket({ sale, settings }) {
 
         const isPromo = item.item_type === 'promo';
 
+        const modifierNames = (item.sale_item_modifiers || [])
+            .map((sim) => sim.modifiers?.name)
+            .filter(Boolean);
+        const modifiersHtml = modifierNames
+            .map((name) => `<div class="item-modifier">&gt; ${escapeHtml(name)}</div>`)
+            .join('');
+
         return `
             <div class="item">
                 <div class="item-name">
@@ -122,6 +129,8 @@ function renderTicket({ sale, settings }) {
                     x
                     ${fmt(item.unit_price)}
                 </div>
+
+                ${modifiersHtml}
             </div>
         `;
 

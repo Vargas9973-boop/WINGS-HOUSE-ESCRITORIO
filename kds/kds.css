@@ -95,6 +95,21 @@ body {
   opacity: 0.92;
 }
 
+.card .item-line {
+  margin-bottom: 0.3vw;
+}
+
+.card .item-modifier {
+  display: inline-block;
+  background: #f97316;
+  color: #fff;
+  font-weight: 900;
+  font-size: clamp(11px, 1vw, 16px);
+  padding: 0.1vw 0.6vw;
+  border-radius: 99px;
+  margin: 0.2vw 0.3vw 0 0;
+}
+
 .card .timer {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
