@@ -29,6 +29,8 @@ let recipeCostsByProduct = {};
 let productAvailability = {};
 let originalRecipeInsumoIds = new Set(); // receta cargada al abrir el modal de edición, para avisar si se quita un insumo
 let onlyMissingRecipe = false;
+let modifiers = [];
+let productModifierGroups = []; // filas {product_id, group_name}
 
 async function loadRecipeSupportData() {
   try {
@@ -44,6 +46,77 @@ async function loadRecipeSupportData() {
     productAvailability = computeProductAvailability(recipesRaw);
   } catch (err) {
     console.error('No se pudo cargar el soporte de recetas:', err);
+  }
+}
+
+// ---------------- MODIFICADORES (salsas) ----------------
+async function loadModifiersData() {
+  try {
+    const [mods, pmg] = await Promise.all([
+      window.db.modifiers.list(), // sin groupName: trae todos
+      window.db.productModifierGroups.getAll()
+    ]);
+    modifiers = mods;
+    productModifierGroups = pmg;
+  } catch (err) {
+    console.error('No se pudieron cargar los modificadores:', err);
+  }
+}
+
+function productHasSaucesGroup(productId) {
+  return productModifierGroups.some((r) => r.product_id === productId && r.group_name === 'Salsas');
+}
+
+function renderModifiers() {
+  const tbody = document.getElementById('modifiers-tbody');
+  if (!tbody) return;
+
+  if (modifiers.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">No hay modificadores registrados.</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = modifiers
+    .map(
+      (m) => `
+    <tr>
+      <td>${escapeHtml(m.name)}</td>
+      <td>${escapeHtml(m.group_name)}</td>
+      <td>
+        <select class="modifier-inventory-select" data-id="${m.id}">
+          <option value="">Sin vincular</option>
+          ${inventoryOptions
+            .map(
+              (i) =>
+                `<option value="${i.id}" ${i.id === m.inventory_id ? 'selected' : ''}>${escapeHtml(i.name)} (${i.stock} ${escapeHtml(i.unit || '')})</option>`
+            )
+            .join('')}
+        </select>
+      </td>
+      <td>
+        <button class="btn btn-outline btn-sm" data-save-modifier="${m.id}">Guardar</button>
+      </td>
+    </tr>
+  `
+    )
+    .join('');
+
+  tbody.querySelectorAll('[data-save-modifier]').forEach((b) => {
+    b.addEventListener('click', () => saveModifierInventory(Number(b.dataset.saveModifier)));
+  });
+}
+
+async function saveModifierInventory(id) {
+  const select = document.querySelector(`.modifier-inventory-select[data-id="${id}"]`);
+  const inventoryId = select.value ? Number(select.value) : null;
+  try {
+    await window.db.modifiers.update(id, { inventory_id: inventoryId });
+    toast('Modificador actualizado.', 'success');
+    await loadModifiersData();
+    renderModifiers();
+  } catch (err) {
+    console.error('No se pudo actualizar el modificador:', err);
+    toast('No se pudo actualizar el modificador.', 'error');
   }
 }
 
@@ -220,6 +293,7 @@ async function openProductModal(id = null) {
   document.getElementById('product-employee-price').value = p && p.employee_price != null ? p.employee_price : '';
   document.getElementById('product-active').value = p ? String(p.active) : '1';
   document.getElementById('product-stock').value = p && p.stock != null ? p.stock : '';
+  document.getElementById('product-sauces-group').checked = p ? productHasSaucesGroup(p.id) : false;
   updateNamePlaceholder();
   document.getElementById('recipe-rows').innerHTML = '';
   originalRecipeInsumoIds = new Set();
@@ -323,10 +397,19 @@ document.getElementById('btn-save-product').addEventListener('click', async () =
       toast('El producto se guardó, pero no se pudo guardar su receta.', 'error');
     }
 
+    try {
+      await window.db.productModifierGroups.set(productId, 'Salsas', document.getElementById('product-sauces-group').checked);
+    } catch (modErr) {
+      console.error('No se pudo actualizar el grupo de modificadores:', modErr);
+      toast('El producto se guardó, pero no se pudo actualizar la selección de salsa.', 'error');
+    }
+
     closeModal('product-modal');
     await loadProducts();
     await loadRecipeSupportData();
+    await loadModifiersData();
     renderProducts();
+    renderModifiers();
   } catch (err) {
   console.error('ERROR AL GUARDAR PRODUCTO:', err);
   toast(`No se pudo guardar el producto: ${err.message}`, 'error');
@@ -450,6 +533,8 @@ document.getElementById('chk-only-missing-recipe').addEventListener('change', (e
 document.addEventListener('DOMContentLoaded', async () => {
   guardSession(['admin']);
   await loadRecipeSupportData();
+  await loadModifiersData();
   await loadProducts();
   loadPromotions();
+  renderModifiers();
 });

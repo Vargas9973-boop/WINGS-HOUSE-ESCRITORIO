@@ -102,6 +102,14 @@ contextBridge.exposeInMainWorld('db', {
   settings: {
     getAll: () => call('settings:getAll'),
     set: (key, value) => call('settings:set', key, value)
+  },
+  modifiers: {
+    list: (groupName) => call('modifiers:list', groupName),
+    update: (id, data) => call('modifiers:update', id, data)
+  },
+  productModifierGroups: {
+    getAll: () => call('productModifierGroups:getAll'),
+    set: (productId, groupName, enabled) => call('productModifierGroups:set', productId, groupName, enabled)
   }
 });
 

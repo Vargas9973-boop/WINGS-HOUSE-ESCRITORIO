@@ -25,6 +25,7 @@
       <div class="tabs-bar">
         <button class="tab-btn active" data-tab="products">Productos</button>
         <button class="tab-btn" data-tab="promotions">Promociones</button>
+        <button class="tab-btn" data-tab="modifiers">Modificadores</button>
       </div>
 
       <!-- TAB PRODUCTOS -->
@@ -83,6 +84,29 @@
           </table>
         </div>
       </section>
+
+      <!-- TAB MODIFICADORES -->
+      <section id="tab-modifiers" class="tab-panel" style="display:none;">
+        <div class="section-toolbar">
+          <h2>Modificadores (salsas)</h2>
+        </div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          Vincula cada salsa con su insumo de inventario. El descuento de existencia (60 por venta) lo hace un disparador automático en la base de datos al agregar la salsa a una comanda.
+        </p>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Salsa</th>
+                <th>Grupo</th>
+                <th>Insumo vinculado</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="modifiers-tbody"></tbody>
+          </table>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -127,6 +151,12 @@
         <div class="field">
           <label>Control de existencia (opcional)</label>
           <input type="number" id="product-stock" min="0" step="1" placeholder="Vacío = sin límite (ilimitado)">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="product-sauces-group">
+            Este producto pide elegir salsa (grupo "Salsas") en Comandas
+          </label>
         </div>
         <div class="field" style="grid-column: 1 / -1;">
           <label>Receta (insumos que consume esta venta)</label>

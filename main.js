@@ -655,6 +655,14 @@ function registerIpcHandlers() {
   safeHandle('comandas:assignDriver', (saleId, driverId, deliveryFee) => db.comandaAssignDriver(saleId, driverId, deliveryFee));
 
   // ------------------------------------------------------------------
+  // MODIFICADORES (salsas) -- ver product_modifier_groups / sale_item_modifiers
+  // ------------------------------------------------------------------
+  safeHandle('modifiers:list', (groupName) => db.getModifiers(groupName));
+  safeHandle('modifiers:update', (id, data) => db.updateModifier(id, data));
+  safeHandle('productModifierGroups:getAll', () => db.getAllProductModifierGroups());
+  safeHandle('productModifierGroups:set', (productId, groupName, enabled) => db.setProductModifierGroup(productId, groupName, enabled));
+
+  // ------------------------------------------------------------------
   // REPARTIDORES / LIQUIDACIÓN DE DINERO EN CALLE
   // ------------------------------------------------------------------
   safeHandle('drivers:getAll', () => db.getDrivers());

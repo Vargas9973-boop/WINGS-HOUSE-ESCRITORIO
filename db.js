@@ -722,12 +722,18 @@ async function openTable(tableNumber, openedBy) {
   return { id: data };
 }
 
+// Trae cada renglón de sale_items junto con sus modificadores (salsas)
+// elegidos, si los tiene -- sale_item_modifiers(modifier_id) + el nombre de
+// la salsa vía su FK a modifiers. Usado tanto por la comanda de mesa como
+// por la de para llevar para poder pintar "• {salsa}" bajo el producto.
+const SALE_ITEMS_WITH_MODIFIERS_SELECT = '*, sale_item_modifiers(id, modifier_id, modifiers(id, name))';
+
 async function getOpenSaleByTable(tableNumber) {
   const { data: sale, error } = await supabase.from('sales').select('*')
     .eq('status', 'abierta').eq('table_number', tableNumber).eq('branch_id', getCurrentBranchId()).maybeSingle();
   must(error, 'No se pudo obtener la mesa');
   if (!sale) return null;
-  const { data: items, error: itErr } = await supabase.from('sale_items').select('*').eq('sale_id', sale.id).order('id');
+  const { data: items, error: itErr } = await supabase.from('sale_items').select(SALE_ITEMS_WITH_MODIFIERS_SELECT).eq('sale_id', sale.id).order('id');
   must(itErr);
   return { ...sale, items };
 }
@@ -892,12 +898,25 @@ async function getOpenSaleById(saleId) {
   const { data: sale, error } = await supabase.from('sales').select('*').eq('id', saleId).maybeSingle();
   must(error, 'No se pudo obtener el pedido');
   if (!sale || sale.status !== 'abierta') return null;
-  const { data: items, error: itErr } = await supabase.from('sale_items').select('*').eq('sale_id', sale.id).order('id');
+  const { data: items, error: itErr } = await supabase.from('sale_items').select(SALE_ITEMS_WITH_MODIFIERS_SELECT).eq('sale_id', sale.id).order('id');
   must(itErr);
   return { ...sale, items };
 }
 
 async function comandaAddItem(saleId, item) {
+  // Con salsa(s) elegidas: comanda_add_item no soporta modificadores (fue
+  // pensada solo para producto+cantidad), así que este caso se resuelve
+  // aparte con inserción directa en sale_items + sale_item_modifiers, sin
+  // tocar el RPC para no romper el flujo normal sin modificadores.
+  if (Array.isArray(item.modifierIds) && item.modifierIds.length > 0) {
+    return comandaAddItemWithModifiers(
+      saleId,
+      item.id ?? item.productId ?? item.ref_id,
+      item.quantity,
+      item.modifierIds
+    );
+  }
+
   const { error } = await supabase.rpc('comanda_add_item', {
     p_sale_id: saleId,
     p_ref_id: item.id ?? item.ref_id ?? null,
@@ -910,6 +929,96 @@ async function comandaAddItem(saleId, item) {
   const { data: sale, error: selErr } = await supabase.from('sales').select('*').eq('id', saleId).single();
   must(selErr);
   return sale;
+}
+
+// Agrega un producto con modificadores (p.ej. ALITAS + salsa BBQ) a una
+// comanda abierta. A diferencia de comanda_add_item, siempre inserta un
+// renglón nuevo en sale_items (no intenta fusionar cantidad con un renglón
+// existente del mismo producto): dos elecciones de salsa distintas deben
+// verse como líneas separadas en el ticket. El descuento de inventario de
+// cada salsa (60 * cantidad) lo hace trg_sale_item_modifiers_after_insert
+// automáticamente al insertar en sale_item_modifiers -- aquí no se toca
+// inventory directamente.
+async function comandaAddItemWithModifiers(saleId, productId, qty, modifierIds) {
+  const { data: product, error: prodErr } = await supabase.from('products').select('*').eq('id', productId).single();
+  must(prodErr, 'Producto no encontrado');
+
+  const quantity = Math.max(1, Number(qty) || 1);
+  const unitPrice = Number(product.price) || 0;
+
+  const { data: newItem, error: itemErr } = await supabase.from('sale_items').insert([{
+    sale_id: saleId,
+    ref_id: productId,
+    item_type: 'product',
+    name: product.name,
+    unit_price: unitPrice,
+    quantity,
+    subtotal: unitPrice * quantity
+  }]).select().single();
+  must(itemErr, 'No se pudo agregar el artículo');
+
+  const modifierRows = modifierIds.map((modifierId) => ({
+    sale_item_id: newItem.id,
+    modifier_id: modifierId
+  }));
+  const { error: modErr } = await supabase.from('sale_item_modifiers').insert(modifierRows);
+  must(modErr, 'No se pudieron guardar las salsas elegidas');
+
+  // Mismo cálculo que hace comanda_add_item al final: total = suma de subtotales.
+  const { data: items, error: sumErr } = await supabase.from('sale_items').select('subtotal').eq('sale_id', saleId);
+  must(sumErr);
+  const total = (items || []).reduce((acc, row) => acc + (Number(row.subtotal) || 0), 0);
+  const { error: updErr } = await supabase.from('sales').update({ total }).eq('id', saleId);
+  must(updErr, 'No se pudo actualizar el total de la venta');
+
+  const { data: sale, error: selErr } = await supabase.from('sales').select('*').eq('id', saleId).single();
+  must(selErr);
+  return sale;
+}
+
+// Modificadores (p.ej. salsas de Alitas/Boneless). groupName es opcional:
+// sin él, trae todos los modificadores de todos los grupos (usado por la
+// pantalla de administración de catálogo).
+async function getModifiers(groupName) {
+  let query = supabase.from('modifiers').select('*, inventory!inner(stock)');
+  if (groupName) query = query.eq('group_name', groupName);
+  const { data, error } = await query.order('name');
+  must(error, 'No se pudieron obtener los modificadores');
+  return data || [];
+}
+
+async function updateModifier(id, data) {
+  const update = {};
+  if (data.name !== undefined) update.name = data.name;
+  if (data.inventory_id !== undefined) update.inventory_id = data.inventory_id;
+  if (data.price_extra !== undefined) update.price_extra = data.price_extra != null ? Number(data.price_extra) : null;
+
+  const { data: row, error } = await supabase.from('modifiers').update(update).eq('id', id).select().single();
+  must(error, 'No se pudo actualizar el modificador');
+  return row;
+}
+
+// Qué productos tienen qué grupo de modificadores asignado (p.ej. ALITAS ->
+// 'Salsas'). Se trae completo de una vez -- son pocas filas -- para que el
+// catálogo de comandas pueda decidir en el cliente si abrir el selector de
+// salsa antes de agregar un producto al carrito.
+async function getAllProductModifierGroups() {
+  const { data, error } = await supabase.from('product_modifier_groups').select('*');
+  must(error, 'No se pudieron obtener los grupos de modificadores por producto');
+  return data || [];
+}
+
+async function setProductModifierGroup(productId, groupName, enabled) {
+  const { error: delErr } = await supabase.from('product_modifier_groups')
+    .delete().eq('product_id', productId).eq('group_name', groupName);
+  must(delErr, 'No se pudo actualizar el grupo de modificadores');
+
+  if (enabled) {
+    const { error: insErr } = await supabase.from('product_modifier_groups')
+      .insert([{ product_id: productId, group_name: groupName }]);
+    must(insErr, 'No se pudo asignar el grupo de modificadores');
+  }
+  return true;
 }
 
 async function comandaUpdateItemQty(itemId, quantity) {
@@ -2467,10 +2576,16 @@ module.exports = {
   comandaAssignDriver,
   getOpenSaleById,
   comandaAddItem,
+  comandaAddItemWithModifiers,
   comandaUpdateItemQty,
   comandaRemoveItem,
   comandaCloseTable,
   comandaCancelTable,
+  // modificadores (salsas)
+  getModifiers,
+  updateModifier,
+  getAllProductModifierGroups,
+  setProductModifierGroup,
   // repartidores / liquidación
   getDrivers,
   createDriver,

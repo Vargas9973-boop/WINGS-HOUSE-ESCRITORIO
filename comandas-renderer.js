@@ -12,6 +12,8 @@ let currentItems = [];
 let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
 let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
+let productModifierGroupsByProduct = new Map(); // productId -> Set(group_name), p.ej. 4 -> Set(['Salsas'])
+let cachedSauceModifiers = null; // caché de window.db.modifiers.list('Salsas') -- ver showSauceSelector()
 
 // Semáforo de disponibilidad por producto a partir de recipes+inventory
 // (window.db.recipes.getAllWithStock). Copia de la versión en common.js:
@@ -618,15 +620,24 @@ document.getElementById('btn-back').addEventListener('click', () => {
 async function ensureCatalog() {
   if (catalogLoaded) return;
 
-  const [products, promos, recipesRaw] = await Promise.all([
+  const [products, promos, recipesRaw, productModifierGroups] = await Promise.all([
     window.db.products.getAll(),
     window.db.promotions.getAll(),
-    window.db.recipes.getAllWithStock()
+    window.db.recipes.getAllWithStock(),
+    window.db.productModifierGroups.getAll()
   ]);
 
   allProducts = products.filter((p) => p.active);
   allPromotions = promos.filter((p) => p.active);
   productAvailability = computeProductAvailability(recipesRaw);
+
+  productModifierGroupsByProduct = new Map();
+  (productModifierGroups || []).forEach((row) => {
+    if (!productModifierGroupsByProduct.has(row.product_id)) {
+      productModifierGroupsByProduct.set(row.product_id, new Set());
+    }
+    productModifierGroupsByProduct.get(row.product_id).add(row.group_name);
+  });
 
   catalogLoaded = true;
 }
@@ -1048,11 +1059,118 @@ function stopOrderAutoRefresh() {
 }
 
 // ==========================================================================
+// SELECTOR DE SALSA -- modal vanilla, igual patrón que openQtyKeypad en
+// common.js (creado una sola vez, reusado, resuelto vía Promise). Selección
+// única (mínimo 1, máximo 1): el botón "Agregar" queda deshabilitado hasta
+// que se elige una salsa.
+// ==========================================================================
+
+async function getSauceModifiers() {
+  if (!cachedSauceModifiers) {
+    cachedSauceModifiers = await window.db.modifiers.list('Salsas');
+  }
+  return cachedSauceModifiers;
+}
+
+let __sauceSelectorResolve = null;
+let __sauceSelectorChoice = null;
+
+function ensureSauceSelectorModal() {
+  let overlay = document.getElementById('sauce-selector-overlay');
+  if (overlay) return overlay;
+
+  overlay = document.createElement('div');
+  overlay.id = 'sauce-selector-overlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-content sauce-selector-box">
+      <h3>Elige la salsa</h3>
+      <div id="sauce-selector-grid" class="sauce-selector-grid"></div>
+      <div class="modal-buttons">
+        <button type="button" class="btn-secondary" id="sauce-selector-cancel">Cancelar</button>
+        <button type="button" class="btn-primary" id="sauce-selector-confirm" disabled>Agregar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) resolveSauceSelector(null);
+  });
+  overlay.querySelector('#sauce-selector-cancel').addEventListener('click', () => resolveSauceSelector(null));
+  overlay.querySelector('#sauce-selector-confirm').addEventListener('click', () => resolveSauceSelector(__sauceSelectorChoice));
+
+  return overlay;
+}
+
+function resolveSauceSelector(value) {
+  document.getElementById('sauce-selector-overlay')?.classList.remove('show');
+  const resolve = __sauceSelectorResolve;
+  __sauceSelectorResolve = null;
+  __sauceSelectorChoice = null;
+  if (resolve) resolve(value);
+}
+
+async function showSauceSelector() {
+  const overlay = ensureSauceSelectorModal();
+  const grid = document.getElementById('sauce-selector-grid');
+  const confirmBtn = document.getElementById('sauce-selector-confirm');
+
+  __sauceSelectorChoice = null;
+  confirmBtn.disabled = true;
+  grid.innerHTML = `<div class="sauce-selector-loading">Cargando salsas...</div>`;
+  overlay.classList.add('show');
+
+  let modifiers = [];
+  try {
+    modifiers = await getSauceModifiers();
+  } catch (err) {
+    console.error('No se pudieron cargar las salsas:', err);
+    grid.innerHTML = `<div class="sauce-selector-loading">No se pudieron cargar las salsas.</div>`;
+    return new Promise((resolve) => { __sauceSelectorResolve = resolve; });
+  }
+
+  grid.innerHTML = modifiers
+    .map((m) => `
+      <button type="button" class="sauce-option" data-id="${m.id}">
+        ${escapeHtml(m.name)}
+      </button>
+    `)
+    .join('');
+
+  grid.querySelectorAll('.sauce-option').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      grid.querySelectorAll('.sauce-option').forEach((b) => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      __sauceSelectorChoice = modifiers.find((m) => m.id === Number(btn.dataset.id)) || null;
+      confirmBtn.disabled = !__sauceSelectorChoice;
+    });
+  });
+
+  return new Promise((resolve) => {
+    __sauceSelectorResolve = resolve;
+  });
+}
+
+// ==========================================================================
 // AGREGAR PRODUCTO / PROMOCIÓN
 // ==========================================================================
 
 async function addToOrder(item) {
   try {
+    // Si el producto pertenece al grupo "Salsas" (ver product_modifier_groups,
+    // asignado hoy a ALITAS/BONELESS), se exige elegir una salsa antes de
+    // agregarlo. Si el usuario cancela el selector, se aborta sin llamar a
+    // addItem.
+    if (item.itemType === 'product') {
+      const groups = productModifierGroupsByProduct.get(item.id);
+      if (groups && groups.has('Salsas')) {
+        const chosen = await showSauceSelector();
+        if (!chosen) return;
+        item = { ...item, modifierIds: [chosen.id], modifierName: chosen.name };
+      }
+    }
+
     await window.comandasAPI.addItem(
       currentSaleId,
       item
@@ -1125,6 +1243,16 @@ function renderCart(total) {
           ? product.stock
           : null;
 
+        const modifiersLine = (item.sale_item_modifiers && item.sale_item_modifiers.length > 0)
+          ? `
+            <div class="cart-item-modifiers">
+              ${item.sale_item_modifiers
+                .map((sim) => `• ${escapeHtml(sim.modifiers ? sim.modifiers.name : '')}`)
+                .join('<br>')}
+            </div>
+          `
+          : '';
+
         let stockLine = '';
 
         if (stock != null) {
@@ -1169,6 +1297,8 @@ function renderCart(total) {
               <span class="line-price">
                 ${fmt(item.subtotal)}
               </span>
+
+              ${modifiersLine}
 
               ${stockLine}
 
