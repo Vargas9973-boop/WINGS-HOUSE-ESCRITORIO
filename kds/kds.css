@@ -141,6 +141,17 @@ body {
   margin-bottom: 0.4vw;
 }
 
+.card .takeout-badge {
+  display: inline-block;
+  background: #7c3aed;
+  color: #fff;
+  font-weight: 900;
+  font-size: clamp(13px, 1.3vw, 20px);
+  padding: 0.3vw 0.8vw;
+  border-radius: 0.4vw;
+  margin-bottom: 0.4vw;
+}
+
 .card .delivery-driver-name {
   font-size: clamp(12px, 1.1vw, 16px);
   opacity: 0.85;

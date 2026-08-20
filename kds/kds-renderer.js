@@ -92,6 +92,13 @@ function cardHtml(order) {
   const deliveryBadge = order.isDelivery
     ? `<div class="delivery-badge">🛵 DOMICILIO ${fmt(order.total)}</div>`
     : '';
+  // Mesa ya se distingue con "Mesa N" en el título (orderLabel); lo que
+  // faltaba era diferenciar a simple vista domicilio de un para llevar
+  // normal cuando ninguno tiene mesa -- mismo criterio que ya usa
+  // comandas-renderer.js para separar sus tarjetas (is_delivery).
+  const takeoutBadge = !order.tableNumber && !order.isDelivery
+    ? `<div class="takeout-badge">🥡 PARA LLEVAR</div>`
+    : '';
   const driverLine = order.isDelivery && order.driverName
     ? `<div class="delivery-driver-name">Repartidor: ${escapeHtml(order.driverName)}</div>`
     : '';
@@ -101,6 +108,7 @@ function cardHtml(order) {
   return `
     <div class="card ${overClass} ${isSelected ? 'selected' : ''}" data-id="${order.id}">
       ${deliveryBadge}
+      ${takeoutBadge}
       <div class="id">${escapeHtml(orderLabel(order))}</div>
       ${driverLine}
       <div class="items">${itemsHtml}</div>

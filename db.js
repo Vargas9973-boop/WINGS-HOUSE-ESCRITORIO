@@ -1249,6 +1249,24 @@ async function updateKdsStatus(saleId, status) {
   const patch = { kds_status: status };
   const tsColumn = KDS_TIMESTAMP_COLUMN[status];
   if (tsColumn) patch[tsColumn] = new Date().toISOString();
+
+  // Pedidos "para llevar" pagados desde la web (client_type='Llevar', ver
+  // process_sale/wing-house-web/comandas.jsx) nacen 'abierta' para que
+  // cocina los vea (20260819090300_fix_web_takeout_stays_open.sql), pero
+  // nadie más los cierra: no pasan por close_table (ya se cobraron al
+  // pedirse) ni por comandaSetDeliveryStatus (no son domicilio). Marcarlos
+  // 'entregada' aquí -- el cliente recoge su pedido -- es el único momento
+  // que le queda a la app para cerrarlos. NO aplica a 'Para llevar' (el
+  // botón de Comandas de escritorio, que se cobra después con
+  // close_table), a domicilio (cierra con comandaSetDeliveryStatus, que
+  // además fija payment_status) ni a mesa.
+  if (status === 'entregada') {
+    const { data: sale } = await supabase.from('sales').select('client_type').eq('id', saleId).maybeSingle();
+    if (sale && sale.client_type === 'Llevar') {
+      patch.status = 'completada';
+    }
+  }
+
   const { error } = await supabase.from('sales').update(patch).eq('id', saleId);
   must(error, 'No se pudo actualizar el estado de cocina');
   return true;
