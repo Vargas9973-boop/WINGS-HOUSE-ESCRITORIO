@@ -70,7 +70,12 @@ function cardHtml(order) {
         const modifiersHtml = (it.modifiers || [])
           .map((name) => `<span class="item-modifier">${escapeHtml(name.toUpperCase())}</span>`)
           .join('');
-        return `<div class="item-line">${it.quantity}x ${escapeHtml(it.name)}${modifiersHtml ? `<br>${modifiersHtml}` : ''}</div>`;
+        // Combos (ver product_components): subproductos del combo, p.ej.
+        // "+ 2x Papa Francesa" bajo "1x PROMO 40 ALITAS".
+        const componentsHtml = (it.components || [])
+          .map((c) => `<div class="item-component">+ ${c.quantity}x ${escapeHtml(c.name)}</div>`)
+          .join('');
+        return `<div class="item-line">${it.quantity}x ${escapeHtml(it.name)}${modifiersHtml ? `<br>${modifiersHtml}` : ''}${componentsHtml}</div>`;
       }).join('')
     : '<div style="opacity:.6">Sin artículos</div>';
 

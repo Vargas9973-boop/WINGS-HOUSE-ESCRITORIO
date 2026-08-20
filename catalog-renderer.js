@@ -6,7 +6,8 @@ const CATEGORY_LABELS = {
   papas: 'Papas',
   acompanantes: 'Acompañantes',
   bebidas: 'Bebidas',
-  extras: 'Extras'
+  extras: 'Extras',
+  combos: 'Combos/Promos'
 };
 
 // Etiqueta legible de cualquier categoría, incluida "Todas las categorías" (null).
@@ -30,7 +31,9 @@ let productAvailability = {};
 let originalRecipeInsumoIds = new Set(); // receta cargada al abrir el modal de edición, para avisar si se quita un insumo
 let onlyMissingRecipe = false;
 let modifiers = [];
-let productModifierGroups = []; // filas {product_id, group_name}
+let productModifierGroups = []; // filas {product_id, group_name, qty}
+let productComponents = []; // filas {parent_product_id, component_product_id, qty, component}
+let productIdsWithComponents = new Set();
 
 async function loadRecipeSupportData() {
   try {
@@ -65,6 +68,21 @@ async function loadModifiersData() {
 
 function productHasSaucesGroup(productId) {
   return productModifierGroups.some((r) => r.product_id === productId && r.group_name === 'Salsas');
+}
+
+function saucesGroupQty(productId) {
+  const row = productModifierGroups.find((r) => r.product_id === productId && r.group_name === 'Salsas');
+  return row ? Math.max(1, Number(row.qty) || 1) : 1;
+}
+
+// ---------------- COMBOS (product_components) ----------------
+async function loadComboData() {
+  try {
+    productComponents = await window.db.productComponents.getAll();
+    productIdsWithComponents = new Set(productComponents.map((r) => r.parent_product_id));
+  } catch (err) {
+    console.error('No se pudieron cargar los combos:', err);
+  }
 }
 
 function renderModifiers() {
@@ -187,7 +205,7 @@ function renderProducts() {
     .map(
       (p) => `
     <tr>
-      <td>${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(p.name)}${productIdsWithComponents.has(p.id) ? ' <span class="tag active" title="Este producto tiene componentes de combo">COMBO</span>' : ''}</td>
       <td>${CATEGORY_LABELS[normalizeCategory(p.category)] || p.category}</td>
       <td>${fmtMoney(p.price)}${recipeCostsByProduct[p.id] != null ? `<div class="recipe-cost-hint">Costo receta: ${fmtMoney(recipeCostsByProduct[p.id])}</div>` : ''}</td>
       <td>${p.employee_price != null ? fmtMoney(p.employee_price) : '<span style="color:var(--text-muted)">Automático</span>'}</td>
@@ -283,6 +301,54 @@ function collectRecipeRows() {
 
 document.getElementById('btn-add-recipe-row').addEventListener('click', () => addRecipeRow());
 
+// ---------------- COMBO ROWS (product_components) ----------------
+// Mismo patrón que addRecipeRow/renderRecipeRows/collectRecipeRows, pero
+// eligiendo un producto del catálogo (no un insumo) -- excluye al propio
+// producto que se está editando para no permitir un combo autorreferente.
+function addComboRow(componentProductId = '', qty = '') {
+  const container = document.getElementById('combo-rows');
+  const currentId = Number(document.getElementById('product-id').value) || null;
+  const row = document.createElement('div');
+  row.className = 'field-row combo-row';
+  row.innerHTML = `
+    <select class="combo-component">
+      <option value="">Selecciona un producto...</option>
+      ${products
+        .filter((p) => p.id !== currentId)
+        .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+        .join('')}
+    </select>
+    <input type="number" class="combo-qty" min="0.01" step="1" placeholder="Cantidad">
+    <button type="button" class="btn btn-danger btn-sm" data-remove-combo-row>✕</button>
+  `;
+  row.querySelector('.combo-component').value = componentProductId ? String(componentProductId) : '';
+  row.querySelector('.combo-qty').value = qty || '';
+  row.querySelector('[data-remove-combo-row]').addEventListener('click', () => row.remove());
+  container.appendChild(row);
+}
+
+function renderComboRows(rows) {
+  const container = document.getElementById('combo-rows');
+  container.innerHTML = '';
+  if (!rows || rows.length === 0) return;
+  rows.forEach((r) => addComboRow(r.component_product_id, r.qty));
+}
+
+function collectComboRows() {
+  return Array.from(document.querySelectorAll('#combo-rows .combo-row'))
+    .map((row) => ({
+      component_product_id: Number(row.querySelector('.combo-component').value) || null,
+      qty: Number(row.querySelector('.combo-qty').value) || 0
+    }))
+    .filter((r) => r.component_product_id && r.qty > 0);
+}
+
+document.getElementById('btn-add-combo-row').addEventListener('click', () => addComboRow());
+
+document.getElementById('product-sauces-group').addEventListener('change', (e) => {
+  document.getElementById('product-sauces-qty-wrap').style.display = e.target.checked ? 'flex' : 'none';
+});
+
 async function openProductModal(id = null) {
   const p = id ? products.find((x) => x.id === id) : null;
   document.getElementById('product-modal-title').textContent = p ? 'Editar producto' : 'Nuevo producto';
@@ -293,9 +359,13 @@ async function openProductModal(id = null) {
   document.getElementById('product-employee-price').value = p && p.employee_price != null ? p.employee_price : '';
   document.getElementById('product-active').value = p ? String(p.active) : '1';
   document.getElementById('product-stock').value = p && p.stock != null ? p.stock : '';
-  document.getElementById('product-sauces-group').checked = p ? productHasSaucesGroup(p.id) : false;
+  const hasSauces = p ? productHasSaucesGroup(p.id) : false;
+  document.getElementById('product-sauces-group').checked = hasSauces;
+  document.getElementById('product-sauces-qty').value = p ? saucesGroupQty(p.id) : 1;
+  document.getElementById('product-sauces-qty-wrap').style.display = hasSauces ? 'flex' : 'none';
   updateNamePlaceholder();
   document.getElementById('recipe-rows').innerHTML = '';
+  document.getElementById('combo-rows').innerHTML = '';
   originalRecipeInsumoIds = new Set();
   openModal('product-modal');
 
@@ -306,6 +376,13 @@ async function openProductModal(id = null) {
       originalRecipeInsumoIds = new Set((recipeRows || []).map((r) => Number(r.insumo_id)));
     } catch (err) {
       console.error('No se pudo cargar la receta del producto:', err);
+    }
+
+    try {
+      const comboRows = await window.db.productComponents.getForProduct(p.id);
+      renderComboRows(comboRows);
+    } catch (err) {
+      console.error('No se pudieron cargar los componentes del combo:', err);
     }
   }
 }
@@ -338,10 +415,16 @@ document.getElementById('btn-save-product').addEventListener('click', async () =
   };
 
   const recipeRows = collectRecipeRows();
+  const comboRows = collectComboRows();
+  const saucesEnabled = document.getElementById('product-sauces-group').checked;
+  const saucesQty = Math.max(1, Number(document.getElementById('product-sauces-qty').value) || 1);
 
-  // No se puede dar de alta (ni dejar) un producto sin insumos asignados.
-  if (recipeRows.length === 0) {
-    toast('Debes asignar insumos del inventario a la receta de este producto.', 'error');
+  // No se puede dar de alta (ni dejar) un producto sin insumos asignados,
+  // salvo que sea un combo: ahí el insumo directo es opcional (puede vivir
+  // solo en sus componentes -- p.ej. un combo hecho 100% de otros
+  // productos del catálogo).
+  if (recipeRows.length === 0 && comboRows.length === 0) {
+    toast('Debes asignar insumos del inventario a la receta de este producto, o al menos un componente de combo.', 'error');
     return;
   }
 
@@ -398,16 +481,24 @@ document.getElementById('btn-save-product').addEventListener('click', async () =
     }
 
     try {
-      await window.db.productModifierGroups.set(productId, 'Salsas', document.getElementById('product-sauces-group').checked);
+      await window.db.productModifierGroups.set(productId, 'Salsas', saucesEnabled, saucesQty);
     } catch (modErr) {
       console.error('No se pudo actualizar el grupo de modificadores:', modErr);
       toast('El producto se guardó, pero no se pudo actualizar la selección de salsa.', 'error');
+    }
+
+    try {
+      await window.db.productComponents.setForProduct(productId, comboRows);
+    } catch (comboErr) {
+      console.error('No se pudieron guardar los componentes del combo:', comboErr);
+      toast('El producto se guardó, pero no se pudieron guardar los componentes del combo.', 'error');
     }
 
     closeModal('product-modal');
     await loadProducts();
     await loadRecipeSupportData();
     await loadModifiersData();
+    await loadComboData();
     renderProducts();
     renderModifiers();
   } catch (err) {
@@ -534,6 +625,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   guardSession(['admin']);
   await loadRecipeSupportData();
   await loadModifiersData();
+  await loadComboData();
   await loadProducts();
   loadPromotions();
   renderModifiers();

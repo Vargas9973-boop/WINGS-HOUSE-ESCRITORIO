@@ -660,7 +660,14 @@ function registerIpcHandlers() {
   safeHandle('modifiers:list', (groupName) => db.getModifiers(groupName));
   safeHandle('modifiers:update', (id, data) => db.updateModifier(id, data));
   safeHandle('productModifierGroups:getAll', () => db.getAllProductModifierGroups());
-  safeHandle('productModifierGroups:set', (productId, groupName, enabled) => db.setProductModifierGroup(productId, groupName, enabled));
+  safeHandle('productModifierGroups:set', (productId, groupName, enabled, qty) => db.setProductModifierGroup(productId, groupName, enabled, qty));
+
+  // ------------------------------------------------------------------
+  // COMBOS -- ver product_components (producto -> producto)
+  // ------------------------------------------------------------------
+  safeHandle('productComponents:getForProduct', (productId) => db.getComponentsForProduct(productId));
+  safeHandle('productComponents:setForProduct', (productId, rows) => db.setComponentsForProduct(productId, rows));
+  safeHandle('productComponents:getAll', () => db.getAllProductComponents());
 
   // ------------------------------------------------------------------
   // REPARTIDORES / LIQUIDACIÓN DE DINERO EN CALLE

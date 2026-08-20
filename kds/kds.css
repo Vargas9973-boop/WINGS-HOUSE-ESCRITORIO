@@ -110,6 +110,12 @@ body {
   margin: 0.2vw 0.3vw 0 0;
 }
 
+.card .item-component {
+  font-size: clamp(11px, 1vw, 16px);
+  opacity: 0.8;
+  padding-left: 1vw;
+}
+
 .card .timer {
   font-variant-numeric: tabular-nums;
   font-weight: 700;

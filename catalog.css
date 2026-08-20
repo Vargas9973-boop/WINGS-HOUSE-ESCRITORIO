@@ -10,6 +10,18 @@
   width: 110px;
 }
 
+.combo-row {
+  margin-bottom: 8px;
+}
+
+.combo-row select {
+  flex: 1;
+}
+
+.combo-row .combo-qty {
+  width: 110px;
+}
+
 .recipe-unit-badge {
   min-width: 40px;
   padding: 4px 8px;

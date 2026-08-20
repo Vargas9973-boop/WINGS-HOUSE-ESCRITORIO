@@ -131,6 +131,7 @@
             <option value="acompanantes">Acompañantes</option>
             <option value="bebidas">Bebidas</option>
             <option value="extras">Extras</option>
+            <option value="combos">Combos/Promos</option>
           </select>
         </div>
         <div class="field">
@@ -157,14 +158,28 @@
             <input type="checkbox" id="product-sauces-group">
             Este producto pide elegir salsa (grupo "Salsas") en Comandas
           </label>
+          <div id="product-sauces-qty-wrap" style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+            <label for="product-sauces-qty" style="margin:0;">Cuántas salsas debe elegir</label>
+            <input type="number" id="product-sauces-qty" min="1" step="1" value="1" style="width:70px;">
+          </div>
         </div>
         <div class="field" style="grid-column: 1 / -1;">
           <label>Receta (insumos que consume esta venta)</label>
           <p style="color:var(--text-muted); font-size:0.78rem; margin:-4px 0 8px;">
-            Obligatoria: agrega al menos un insumo con stock suficiente en inventario, o no se podrá guardar el producto.
+            Obligatoria salvo que el producto sea un combo con al menos un componente abajo: agrega los insumos directos
+            (p.ej. las piezas de ALITA de un combo) con stock suficiente en inventario.
           </p>
           <div id="recipe-rows"></div>
           <button type="button" class="btn btn-outline btn-sm" id="btn-add-recipe-row">+ Agregar insumo</button>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Componentes del combo (opcional)</label>
+          <p style="color:var(--text-muted); font-size:0.78rem; margin:-4px 0 8px;">
+            Otros productos del catálogo que incluye este combo (p.ej. 2x Papa Francesa). Cada componente descuenta la
+            receta completa de ese producto, multiplicada por la cantidad de aquí.
+          </p>
+          <div id="combo-rows"></div>
+          <button type="button" class="btn btn-outline btn-sm" id="btn-add-combo-row">+ Agregar componente</button>
         </div>
       </div>
       <div class="modal-actions">

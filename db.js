@@ -1042,17 +1042,60 @@ async function getAllProductModifierGroups() {
   return data || [];
 }
 
-async function setProductModifierGroup(productId, groupName, enabled) {
+async function setProductModifierGroup(productId, groupName, enabled, qty = 1) {
   const { error: delErr } = await supabase.from('product_modifier_groups')
     .delete().eq('product_id', productId).eq('group_name', groupName);
   must(delErr, 'No se pudo actualizar el grupo de modificadores');
 
   if (enabled) {
     const { error: insErr } = await supabase.from('product_modifier_groups')
-      .insert([{ product_id: productId, group_name: groupName }]);
+      .insert([{ product_id: productId, group_name: groupName, qty: Math.max(1, Number(qty) || 1) }]);
     must(insErr, 'No se pudo asignar el grupo de modificadores');
   }
   return true;
+}
+
+// ==========================================================================
+// COMBOS -- product_components: producto -> producto (p.ej. PROMO 40
+// ALITAS incluye 2x PAPA FRANCESA). El insumo directo de un combo (40 pzs
+// de ALITA) NO va aquí -- va en `recipes` como cualquier producto, así
+// reutiliza su trigger de descuento/reposición y su validación de stock
+// (ver 20260819090100_combos_schema.sql).
+// ==========================================================================
+async function getComponentsForProduct(productId) {
+  const { data, error } = await supabase
+    .from('product_components')
+    .select('*, component:component_product_id(id, name, price)')
+    .eq('parent_product_id', productId);
+  must(error, 'No se pudieron obtener los componentes del combo');
+  return data || [];
+}
+
+// Reemplaza por completo los componentes de un combo con la lista recibida:
+// [{ component_product_id, qty }]
+async function setComponentsForProduct(productId, rows) {
+  const { error: delErr } = await supabase.from('product_components').delete().eq('parent_product_id', productId);
+  must(delErr, 'No se pudo actualizar los componentes del combo');
+
+  const clean = (rows || [])
+    .filter((r) => r.component_product_id && Number(r.component_product_id) !== Number(productId) && Number(r.qty) > 0)
+    .map((r) => ({ parent_product_id: productId, component_product_id: Number(r.component_product_id), qty: Number(r.qty) }));
+
+  if (clean.length === 0) return [];
+
+  const { data, error } = await supabase.from('product_components').insert(clean).select();
+  must(error, 'No se pudieron guardar los componentes del combo');
+  return data;
+}
+
+// Todos los combos del catálogo de una vez -- usado por catalog-renderer.js
+// para marcar con el badge "COMBO" los productos que tienen componentes.
+async function getAllProductComponents() {
+  const { data, error } = await supabase
+    .from('product_components')
+    .select('*, parent:parent_product_id(id, name), component:component_product_id(id, name)');
+  must(error, 'No se pudieron obtener los componentes de combos');
+  return data || [];
 }
 
 async function comandaUpdateItemQty(itemId, quantity) {
@@ -1138,18 +1181,46 @@ async function getKdsOrders() {
 
   const { data: items, error: itemsErr } = await supabase
     .from('sale_items')
-    .select('sale_id, name, quantity, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
+    .select('sale_id, name, quantity, ref_id, item_type, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
     .in('sale_id', sales.map((s) => s.id))
     .order('id', { ascending: true });
   must(itemsErr, 'No se pudieron obtener los artículos de las órdenes de cocina');
 
+  // Combos: si el ref_id de un renglón tiene componentes (ver
+  // product_components/PARTE del comentario en 20260819090100_combos_schema.sql),
+  // cocina necesita ver "+ 2x Papa Francesa" bajo el combo, no solo el
+  // nombre de la promo -- la cantidad mostrada ya viene multiplicada por la
+  // cantidad vendida del renglón.
+  const comboProductIds = [...new Set(
+    (items || [])
+      .filter((it) => (it.item_type || 'product') === 'product' && it.ref_id != null)
+      .map((it) => it.ref_id)
+  )];
+
+  let componentsByProduct = {};
+  if (comboProductIds.length > 0) {
+    const { data: components, error: compErr } = await supabase
+      .from('product_components')
+      .select('parent_product_id, qty, component:component_product_id(name)')
+      .in('parent_product_id', comboProductIds);
+    must(compErr, 'No se pudieron obtener los componentes de combo para cocina');
+    (components || []).forEach((c) => {
+      if (!c.component) return;
+      if (!componentsByProduct[c.parent_product_id]) componentsByProduct[c.parent_product_id] = [];
+      componentsByProduct[c.parent_product_id].push({ name: c.component.name, qty: Number(c.qty) || 0 });
+    });
+  }
+
   const itemsBySale = {};
   (items || []).forEach((it) => {
     if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
+    const quantity = Number(it.quantity) || 0;
     const modifiers = (it.sale_item_modifiers || [])
       .map((sim) => sim.modifiers?.name)
       .filter(Boolean);
-    itemsBySale[it.sale_id].push({ name: it.name, quantity: Number(it.quantity) || 0, modifiers });
+    const components = (componentsByProduct[it.ref_id] || [])
+      .map((c) => ({ name: c.name, quantity: c.qty * quantity }));
+    itemsBySale[it.sale_id].push({ name: it.name, quantity, modifiers, components });
   });
 
   return sales.map((s) => ({
@@ -2626,6 +2697,10 @@ module.exports = {
   updateModifier,
   getAllProductModifierGroups,
   setProductModifierGroup,
+  // combos
+  getComponentsForProduct,
+  setComponentsForProduct,
+  getAllProductComponents,
   // repartidores / liquidación
   getDrivers,
   createDriver,

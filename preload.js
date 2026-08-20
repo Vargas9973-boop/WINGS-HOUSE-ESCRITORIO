@@ -109,7 +109,12 @@ contextBridge.exposeInMainWorld('db', {
   },
   productModifierGroups: {
     getAll: () => call('productModifierGroups:getAll'),
-    set: (productId, groupName, enabled) => call('productModifierGroups:set', productId, groupName, enabled)
+    set: (productId, groupName, enabled, qty) => call('productModifierGroups:set', productId, groupName, enabled, qty)
+  },
+  productComponents: {
+    getForProduct: (productId) => call('productComponents:getForProduct', productId),
+    setForProduct: (productId, rows) => call('productComponents:setForProduct', productId, rows),
+    getAll: () => call('productComponents:getAll')
   }
 });
 

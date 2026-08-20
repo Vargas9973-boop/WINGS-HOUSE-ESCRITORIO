@@ -12,7 +12,7 @@ let currentItems = [];
 let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
 let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
-let productModifierGroupsByProduct = new Map(); // productId -> Set(group_name), p.ej. 4 -> Set(['Salsas'])
+let productModifierGroupsByProduct = new Map(); // productId -> Map(group_name -> qty), p.ej. 4 -> Map([['Salsas', 1]]); un combo puede pedir qty=2
 let cachedSauceModifiers = null; // caché de window.db.modifiers.list('Salsas') -- ver showSauceSelector()
 
 // Semáforo de disponibilidad por producto a partir de recipes+inventory
@@ -634,9 +634,9 @@ async function ensureCatalog() {
   productModifierGroupsByProduct = new Map();
   (productModifierGroups || []).forEach((row) => {
     if (!productModifierGroupsByProduct.has(row.product_id)) {
-      productModifierGroupsByProduct.set(row.product_id, new Set());
+      productModifierGroupsByProduct.set(row.product_id, new Map());
     }
-    productModifierGroupsByProduct.get(row.product_id).add(row.group_name);
+    productModifierGroupsByProduct.get(row.product_id).set(row.group_name, Math.max(1, Number(row.qty) || 1));
   });
 
   catalogLoaded = true;
@@ -1060,9 +1060,12 @@ function stopOrderAutoRefresh() {
 
 // ==========================================================================
 // SELECTOR DE SALSA -- modal vanilla, igual patrón que openQtyKeypad en
-// common.js (creado una sola vez, reusado, resuelto vía Promise). Selección
-// única (mínimo 1, máximo 1): el botón "Agregar" queda deshabilitado hasta
-// que se elige una salsa.
+// common.js (creado una sola vez, reusado, resuelto vía Promise). count
+// controla cuántas salsas hay que elegir (1 para un producto normal con
+// grupo "Salsas", más para un combo con product_modifier_groups.qty > 1,
+// p.ej. PROMO 40 ALITAS pidiendo 2): el botón "Agregar" queda deshabilitado
+// hasta elegir exactamente esa cantidad. Devuelve un arreglo de
+// modificadores elegidos, o null si se canceló.
 // ==========================================================================
 
 async function getSauceModifiers() {
@@ -1073,7 +1076,8 @@ async function getSauceModifiers() {
 }
 
 let __sauceSelectorResolve = null;
-let __sauceSelectorChoice = null;
+let __sauceSelectorChoices = [];
+let __sauceSelectorCount = 1;
 
 function ensureSauceSelectorModal() {
   let overlay = document.getElementById('sauce-selector-overlay');
@@ -1084,7 +1088,7 @@ function ensureSauceSelectorModal() {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal-content sauce-selector-box">
-      <h3>Elige la salsa</h3>
+      <h3 id="sauce-selector-title">Elige la salsa</h3>
       <div id="sauce-selector-grid" class="sauce-selector-grid"></div>
       <div class="modal-buttons">
         <button type="button" class="btn-secondary" id="sauce-selector-cancel">Cancelar</button>
@@ -1098,7 +1102,7 @@ function ensureSauceSelectorModal() {
     if (e.target === overlay) resolveSauceSelector(null);
   });
   overlay.querySelector('#sauce-selector-cancel').addEventListener('click', () => resolveSauceSelector(null));
-  overlay.querySelector('#sauce-selector-confirm').addEventListener('click', () => resolveSauceSelector(__sauceSelectorChoice));
+  overlay.querySelector('#sauce-selector-confirm').addEventListener('click', () => resolveSauceSelector(__sauceSelectorChoices));
 
   return overlay;
 }
@@ -1107,17 +1111,22 @@ function resolveSauceSelector(value) {
   document.getElementById('sauce-selector-overlay')?.classList.remove('show');
   const resolve = __sauceSelectorResolve;
   __sauceSelectorResolve = null;
-  __sauceSelectorChoice = null;
+  __sauceSelectorChoices = [];
   if (resolve) resolve(value);
 }
 
-async function showSauceSelector() {
+async function showSauceSelector(count = 1) {
+  count = Math.max(1, Number(count) || 1);
+  __sauceSelectorCount = count;
+
   const overlay = ensureSauceSelectorModal();
   const grid = document.getElementById('sauce-selector-grid');
   const confirmBtn = document.getElementById('sauce-selector-confirm');
+  const title = document.getElementById('sauce-selector-title');
 
-  __sauceSelectorChoice = null;
+  __sauceSelectorChoices = [];
   confirmBtn.disabled = true;
+  title.textContent = count > 1 ? `Elige ${count} salsas` : 'Elige la salsa';
   grid.innerHTML = `<div class="sauce-selector-loading">Cargando salsas...</div>`;
   overlay.classList.add('show');
 
@@ -1140,10 +1149,19 @@ async function showSauceSelector() {
 
   grid.querySelectorAll('.sauce-option').forEach((btn) => {
     btn.addEventListener('click', () => {
-      grid.querySelectorAll('.sauce-option').forEach((b) => b.classList.remove('selected'));
-      btn.classList.add('selected');
-      __sauceSelectorChoice = modifiers.find((m) => m.id === Number(btn.dataset.id)) || null;
-      confirmBtn.disabled = !__sauceSelectorChoice;
+      const id = Number(btn.dataset.id);
+      const already = __sauceSelectorChoices.some((c) => c.id === id);
+      if (already) {
+        __sauceSelectorChoices = __sauceSelectorChoices.filter((c) => c.id !== id);
+        btn.classList.remove('selected');
+      } else if (__sauceSelectorChoices.length < __sauceSelectorCount) {
+        const modifier = modifiers.find((m) => m.id === id);
+        if (modifier) {
+          __sauceSelectorChoices.push(modifier);
+          btn.classList.add('selected');
+        }
+      }
+      confirmBtn.disabled = __sauceSelectorChoices.length !== __sauceSelectorCount;
     });
   });
 
@@ -1164,10 +1182,11 @@ async function addToOrder(item) {
     // addItem.
     if (item.itemType === 'product') {
       const groups = productModifierGroupsByProduct.get(item.id);
-      if (groups && groups.has('Salsas')) {
-        const chosen = await showSauceSelector();
+      const saucesQty = groups && groups.get('Salsas');
+      if (saucesQty) {
+        const chosen = await showSauceSelector(saucesQty);
         if (!chosen) return;
-        item = { ...item, modifierIds: [chosen.id], modifierName: chosen.name };
+        item = { ...item, modifierIds: chosen.map((c) => c.id), modifierNames: chosen.map((c) => c.name) };
       }
     }
 
