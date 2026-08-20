@@ -75,7 +75,8 @@ function cardHtml(order) {
         const componentsHtml = (it.components || [])
           .map((c) => `<div class="item-component">+ ${c.quantity}x ${escapeHtml(c.name)}</div>`)
           .join('');
-        return `<div class="item-line">${it.quantity}x ${escapeHtml(it.name)}${modifiersHtml ? `<br>${modifiersHtml}` : ''}${componentsHtml}</div>`;
+        const noteHtml = it.notes ? `<div class="item-note">📝 ${escapeHtml(it.notes)}</div>` : '';
+        return `<div class="item-line">${it.quantity}x ${escapeHtml(it.name)}${modifiersHtml ? `<br>${modifiersHtml}` : ''}${componentsHtml}${noteHtml}</div>`;
       }).join('')
     : '<div style="opacity:.6">Sin artículos</div>';
 

@@ -1185,7 +1185,7 @@ async function getKdsOrders() {
 
   const { data: items, error: itemsErr } = await supabase
     .from('sale_items')
-    .select('sale_id, name, quantity, ref_id, item_type, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
+    .select('sale_id, name, quantity, notes, ref_id, item_type, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
     .in('sale_id', sales.map((s) => s.id))
     .order('id', { ascending: true });
   must(itemsErr, 'No se pudieron obtener los artículos de las órdenes de cocina');
@@ -1224,7 +1224,7 @@ async function getKdsOrders() {
       .filter(Boolean);
     const components = (componentsByProduct[it.ref_id] || [])
       .map((c) => ({ name: c.name, quantity: c.qty * quantity }));
-    itemsBySale[it.sale_id].push({ name: it.name, quantity, modifiers, components });
+    itemsBySale[it.sale_id].push({ name: it.name, quantity, notes: it.notes || null, modifiers, components });
   });
 
   return sales.map((s) => ({
