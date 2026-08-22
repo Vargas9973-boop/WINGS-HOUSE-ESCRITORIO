@@ -552,8 +552,11 @@ async function createSale(payload, openedBy, cashierId) {
     throw new Error('La venta no contiene artículos.');
   }
 
-  const benefitSettings = await getEmployeeBenefitSettings();
-
+  // Los topes de beneficio/crédito de empleado YA NO se mandan como
+  // parámetros del RPC (20260822090000_process_sale_server_side_benefit_settings.sql):
+  // process_sale los lee él mismo de `settings` -- mandarlos desde aquí
+  // permitía que cualquiera con la anon key los pasara directo por REST y
+  // se saltara el tope configurado en Ajustes.
   const { data, error } = await supabase.rpc('process_sale', {
     p_branch_id: getCurrentBranchId(),
     p_client_type: payload.clientType || 'public',
@@ -568,11 +571,7 @@ async function createSale(payload, openedBy, cashierId) {
       ? Number(payload.employeeId)
       : null,
     p_employee_sale_type: payload.employeeSaleType || null,
-    p_employee_extra_payment: payload.employeeExtraPayment || null,
-    p_benefit_enabled: benefitSettings.benefitEnabled,
-    p_benefit_daily_amount: benefitSettings.benefitDailyAmount,
-    p_weekly_credit_enabled: benefitSettings.weeklyCreditEnabled,
-    p_weekly_credit_limit: benefitSettings.weeklyCreditLimit
+    p_employee_extra_payment: payload.employeeExtraPayment || null
   });
 
   must(error, 'No se pudo registrar la venta');
@@ -639,16 +638,19 @@ async function createSale(payload, openedBy, cashierId) {
     try {
       const payrollSettings = await getPayrollSettings();
       const { start, end } = getWeekRange(payrollSettings.dayNumber);
-      const { error: dedErr } = await supabase.from('payroll_deductions').insert([{
-        employee_name: data.employee_name,
-        amount: Number(data.credit_amount),
-        sale_id: data.id,
-        reason: 'Excedente crédito nómina - venta empleado',
-        status: 'pendiente',
-        week_start: start,
-        week_end: end,
-        branch_id: getCurrentBranchId()
-      }]);
+      // create_payroll_deduction (RPC, SECURITY DEFINER) reemplaza el insert
+      // directo: payroll_deductions tenía "allow_anon_all" FOR ALL abierta,
+      // cerrada en 20260822100000_close_remaining_anon_write_access.sql.
+      const { error: dedErr } = await supabase.rpc('create_payroll_deduction', {
+        p_branch_id: getCurrentBranchId(),
+        p_employee_name: data.employee_name,
+        p_amount: Number(data.credit_amount),
+        p_sale_id: data.id,
+        p_reason: 'Excedente crédito nómina - venta empleado',
+        p_status: 'pendiente',
+        p_week_start: start,
+        p_week_end: end
+      });
       if (dedErr) console.error('No se pudo registrar la deducción de nómina:', dedErr.message);
     } catch (err) {
       console.error('No se pudo registrar la deducción de nómina:', err.message);
@@ -2179,14 +2181,10 @@ async function createEmployee(data) {
         active
     });
 
-    // PENDIENTE: create_employee todavía no recibe p_branch_id -- RPC "caja
-    // negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql. Agregar
-    // `p_branch_id: getCurrentBranchId()` aquí en cuanto exista 0009-parte-2
-    // (y employees.branch_id ya no dependa del DEFAULT -- ver
-    // 20260820900000_drop_branch_default_RUN_LAST.sql).
     const { data: row, error } = await supabase.rpc(
         'create_employee',
         {
+            p_branch_id: getCurrentBranchId(),
             p_name: name,
             p_role: role,
             p_salary: salary,
@@ -2264,21 +2262,11 @@ async function getAllAttendance(filters = {}) {
   return data;
 }
 
-// register_attendance sigue siendo un RPC "caja negra" (no versionado en
-// este repo, ver 20260820060000_tmp_introspect_pending_rpcs.sql) que NO
-// recibe p_branch_id -- no se reescribe a ciegas (regla del proyecto: no
-// tocar RPC sin ver su definición real primero). Mientras tanto, esta
-// validación de sucursal se hace aquí del lado del cliente: sin esto,
-// nada impedía registrar asistencia para un employeeId de otra sucursal
-// si algo (bug futuro, llamada directa) mandara uno que no viniera ya del
-// selector de empleados (que sí está filtrado por sucursal).
 async function registerAttendance(employeeId) {
-  const { data: emp, error: empErr } = await supabase
-    .from('employees').select('id').eq('id', employeeId).eq('branch_id', getCurrentBranchId()).maybeSingle();
-  must(empErr, 'No se pudo verificar el empleado');
-  if (!emp) throw new Error('El empleado no existe o no pertenece a esta sucursal.');
-
-  const { data, error } = await supabase.rpc('register_attendance', { p_employee_id: employeeId });
+  const { data, error } = await supabase.rpc('register_attendance', {
+    p_branch_id: getCurrentBranchId(),
+    p_employee_id: employeeId
+  });
   must(error, 'No se pudo registrar la asistencia');
   return data;
 }
@@ -2289,12 +2277,12 @@ async function registerAttendance(employeeId) {
 async function getPayrollWeek(weekStart) {
   const { data: employees, error } = await supabase.from('employees').select('*').eq('branch_id', getCurrentBranchId()).eq('active', true).order('name');
   must(error, 'No se pudieron obtener los empleados');
-  const { data: records, error: recErr } = await supabase.from('payroll_weeks').select('*').eq('week_start', weekStart);
+  const { data: records, error: recErr } = await supabase.from('payroll_weeks').select('*').eq('branch_id', getCurrentBranchId()).eq('week_start', weekStart);
   must(recErr, 'No se pudo obtener la nómina de la semana');
 
   const { data: creditRows, error: credErr } = await supabase.rpc(
     'get_payroll_week_credit',
-    { p_week_start: weekStart }
+    { p_branch_id: getCurrentBranchId(), p_week_start: weekStart }
   );
   must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
@@ -2351,6 +2339,7 @@ async function getPayrollDeductionsPendientes(weekStart) {
 
 async function setPayrollBonus(payload) {
   const { data, error } = await supabase.rpc('set_payroll_bonus', {
+    p_branch_id: getCurrentBranchId(),
     p_employee_id: payload.employeeId,
     p_week_start: payload.weekStart,
     p_bonus_credited: !!payload.bonusCredited
@@ -2360,7 +2349,7 @@ async function setPayrollBonus(payload) {
 }
 
 async function getPayrollHistory(filters = {}) {
-  let query = supabase.from('payroll_weeks').select('*');
+  let query = supabase.from('payroll_weeks').select('*').eq('branch_id', getCurrentBranchId());
   if (filters.weekFrom) query = query.gte('week_start', filters.weekFrom);
   if (filters.weekTo) query = query.lte('week_start', filters.weekTo);
   query = query.order('week_start', { ascending: false }).order('employee_name', { ascending: true });
@@ -2399,7 +2388,7 @@ function faltaDeductionDivisor() {
 }
 
 async function getEmployeesWithAttendanceHistory() {
-  const { data, error } = await supabase.from('attendance').select('employee_id');
+  const { data, error } = await supabase.from('attendance').select('employee_id').eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo verificar el historial de asistencia');
   return new Set((data || []).map((a) => a.employee_id));
 }
@@ -2419,12 +2408,13 @@ async function getPayrollData(weekStart, weekEnd) {
   const { data: bonusRecords, error: bonusErr } = await supabase
     .from('payroll_weeks')
     .select('employee_id, bonus_credited')
+    .eq('branch_id', getCurrentBranchId())
     .eq('week_start', bonusWeekStart);
   must(bonusErr, 'No se pudo obtener el bono acreditado de la semana');
 
   const { data: creditRows, error: credErr } = await supabase.rpc(
     'get_payroll_week_credit',
-    { p_week_start: bonusWeekStart }
+    { p_branch_id: getCurrentBranchId(), p_week_start: bonusWeekStart }
   );
   must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
@@ -2631,24 +2621,25 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
     branch_id: getCurrentBranchId()
   }));
 
+  // upsert_payroll_history / close_payroll_deductions (RPC, SECURITY
+  // DEFINER) reemplazan el upsert/update directos: payroll_history y
+  // payroll_deductions tenían "allow_anon_all" FOR ALL abierta, cerrada en
+  // 20260822100000_close_remaining_anon_write_access.sql.
   if (snapshot.length > 0) {
-    const { error: histErr } = await supabase
-      .from('payroll_history')
-      .upsert(snapshot, { onConflict: 'week_start,employee_id' });
+    const { error: histErr } = await supabase.rpc('upsert_payroll_history', {
+      p_branch_id: getCurrentBranchId(),
+      p_rows: snapshot
+    });
     must(histErr, 'No se pudo guardar el historial de nómina');
   }
 
-  // Sin el filtro de branch_id esto marcaba como 'descontado' las
-  // deducciones pendientes de CUALQUIER sucursal en el rango de fechas --
-  // cerrar la nómina de una sucursal habría liquidado también las
-  // deducciones de otra que ni siquiera hubiera cerrado todavía.
-  const { error: updErr } = await supabase
-    .from('payroll_deductions')
-    .update({ status: 'descontado' })
-    .eq('status', 'pendiente')
-    .eq('branch_id', getCurrentBranchId())
-    .gte('created_at', localDayStartUtcIso(weekStart))
-    .lte('created_at', localDayEndUtcIso(weekEnd));
+  // El filtro de branch_id evita liquidar deducciones pendientes de otra
+  // sucursal que ni siquiera hubiera cerrado todavía (el RPC lo exige).
+  const { error: updErr } = await supabase.rpc('close_payroll_deductions', {
+    p_branch_id: getCurrentBranchId(),
+    p_from: localDayStartUtcIso(weekStart),
+    p_to: localDayEndUtcIso(weekEnd)
+  });
   must(updErr, 'No se pudo cerrar la nómina');
 
   return { closed: true, employees: snapshot.length };
@@ -2929,13 +2920,19 @@ async function getAllSettings() {
 // tabla: settings ya tiene RLS abierta a anon desde
 // 20260817020000_settings_rls_policy.sql, así que esto no necesita el RPC
 // en absoluto y sí queda scoped a la sucursal actual.
+// set_branch_setting (RPC, SECURITY DEFINER) reemplaza el upsert directo que
+// esta función hacía antes: settings tenía una policy "allow_anon_all" FOR
+// ALL abierta desde 20260817020000_settings_rls_policy.sql, así que
+// cualquiera con la anon key podía escribir cualquier fila de settings de
+// cualquier sucursal directo por REST -- cerrada en
+// 20260822100000_close_remaining_anon_write_access.sql, que también crea
+// este RPC.
 async function setSetting(key, value) {
-  const { error } = await supabase
-    .from('settings')
-    .upsert(
-      { key, value: String(value), branch_id: getCurrentBranchId() },
-      { onConflict: 'key,branch_id' }
-    );
+  const { error } = await supabase.rpc('set_branch_setting', {
+    p_branch_id: getCurrentBranchId(),
+    p_key: key,
+    p_value: String(value)
+  });
   must(error, 'No se pudo guardar el ajuste');
   return true;
 }
