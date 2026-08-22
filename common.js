@@ -67,7 +67,72 @@ function closeModal(id) {
   document.getElementById(id)?.classList.remove('show');
 }
 
+// ==========================================================================
+// LOGO / TEMA DE COLORES (Ajustes -> SaaS) -- settings.logo_url y
+// settings.theme_colors (JSON {primary, secondary}, solo si theme_auto)
+// se guardan como key-value normal, igual que cualquier otro ajuste; no hay
+// columnas nuevas en la tabla. Se cachea en localStorage para que el logo/
+// color aparezcan al instante (antes de que responda Supabase) y para que
+// la app siga viéndose igual sin conexión -- ver localDayStartUtcIso() en
+// db.js para el mismo motivo aplicado a fechas, no a branding.
+const BRAND_CACHE_KEY = 'wh_branding_cache';
+
+function applyBrandingValues(values) {
+  if (!values) return;
+  if (values.logoUrl) {
+    document.querySelectorAll('.header-logo, .login-logo, .ticket-logo, #app-logo').forEach((img) => {
+      img.src = values.logoUrl;
+    });
+  }
+  if (values.primaryColor) document.documentElement.style.setProperty('--brand-orange', values.primaryColor);
+  if (values.secondaryColor) document.documentElement.style.setProperty('--brand-red', values.secondaryColor);
+}
+
+// Quita el override inline: la hoja de estilos vuelve a mandar con sus
+// valores originales (--brand-orange/--brand-red default de common.css).
+function restoreDefaultTheme() {
+  document.documentElement.style.removeProperty('--brand-orange');
+  document.documentElement.style.removeProperty('--brand-red');
+}
+
+// Expuesta en window para que settings-renderer.js la vuelva a llamar justo
+// después de guardar, y así se vea el cambio sin F5.
+async function loadAndApplyBranding() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(BRAND_CACHE_KEY) || 'null');
+    if (cached) applyBrandingValues(cached);
+  } catch {
+    // caché corrupta/ausente: sigue con los defaults hasta que responda Supabase
+  }
+
+  if (!window.db || !window.db.settings) return;
+  try {
+    const settings = await window.db.settings.getAll();
+    const themeAuto = settings.theme_auto === 'true';
+    let primaryColor = null;
+    let secondaryColor = null;
+    if (themeAuto && settings.theme_colors) {
+      try {
+        const parsed = JSON.parse(settings.theme_colors);
+        primaryColor = parsed.primary || null;
+        secondaryColor = parsed.secondary || null;
+      } catch {
+        // valor corrupto: se ignora, se queda en el color default
+      }
+    }
+    if (!themeAuto) restoreDefaultTheme();
+    const values = { logoUrl: settings.logo_url || null, primaryColor, secondaryColor };
+    applyBrandingValues(values);
+    localStorage.setItem(BRAND_CACHE_KEY, JSON.stringify(values));
+  } catch (err) {
+    console.error('No se pudo cargar el logo/tema del negocio:', err);
+  }
+}
+window.loadAndApplyBranding = loadAndApplyBranding;
+
 document.addEventListener('DOMContentLoaded', () => {
+  loadAndApplyBranding();
+
   document.querySelectorAll('[data-nav-home]').forEach((btn) => {
     btn.addEventListener('click', goHome);
   });
@@ -480,7 +545,10 @@ if (!window.__whShortcutsInit) {
 const ROLE_LABELS = { admin: 'Administrador', cajero: 'Cajero', empleado: 'Empleado' };
 
 // Verifica que haya sesión y que el rol esté permitido; si no, redirige.
-// allowedRoles=null significa "cualquier usuario con sesión".
+// allowedRoles=null significa "cualquier usuario con sesión". Sigue
+// funcionando igual que siempre (no se quitó) -- guardPermission() de abajo
+// es la vía nueva, basada en permisos por módulo en vez de un arreglo fijo
+// de nombres de rol.
 async function guardSession(allowedRoles = null) {
   const session = await window.auth.getSession();
   if (!session) {
@@ -488,6 +556,51 @@ async function guardSession(allowedRoles = null) {
     return null;
   }
   if (allowedRoles && !allowedRoles.includes(session.role)) {
+    toast('No tienes permiso para acceder a este módulo.', 'error');
+    setTimeout(goHome, 900);
+    return null;
+  }
+  __currentSessionCache = session;
+  renderUserBadge(session);
+  return session;
+}
+
+// ==========================================================================
+// PERMISOS POR MÓDULO (Cuentas -> Roles) -- login() ya adjunta
+// session.permissions (get_user_permissions RPC) y session.role (texto
+// legado). __currentSessionCache se llena en guardSession()/guardPermission(),
+// así que hasPermission() puede consultarse de forma síncrona después
+// (p.ej. desde sidebar/menu para mostrar/ocultar botones) sin volver a
+// pedir la sesión a IPC cada vez.
+let __currentSessionCache = null;
+
+// role==='admin' (texto legado) siempre pasa, sin importar permissions --
+// nunca debe poder quedar fuera de su propia app. Si el usuario no tiene
+// role_id todavía (instalación sin migrar, permissions=[]) y no es admin,
+// esto deniega -- mismo criterio conservador que guardSession(['admin'])
+// ya aplicaba antes de este sistema para cualquiera que no fuera admin.
+function hasPermission(moduleName, action = 'can_view') {
+  const session = __currentSessionCache;
+  if (!session) return false;
+  if (session.role === 'admin') return true;
+  const perms = session.permissions || [];
+  const modPerm = perms.find((p) => p.module === moduleName);
+  return !!(modPerm && modPerm[action]);
+}
+
+// Reemplazo recomendado de guardSession(['admin', ...]) para pantallas ya
+// migradas al sistema de permisos: exige sesión (cualquier rol) y además el
+// permiso puntual pedido. A diferencia de guardSession(allowedRoles), esto
+// SÍ deja pasar a un rol personalizado (Gerente, Mesero, etc.) si su
+// role_permissions lo autoriza, no solo a los 3 roles de texto legado.
+async function guardPermission(moduleName, action = 'can_view') {
+  const session = await window.auth.getSession();
+  if (!session) {
+    goTo('open-login');
+    return null;
+  }
+  __currentSessionCache = session;
+  if (!hasPermission(moduleName, action)) {
     toast('No tienes permiso para acceder a este módulo.', 'error');
     setTimeout(goHome, 900);
     return null;

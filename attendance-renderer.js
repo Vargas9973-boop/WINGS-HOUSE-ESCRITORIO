@@ -261,7 +261,7 @@ function escapeHtml(str) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const session = await guardSession(['admin', 'empleado']);
+  const session = await guardPermission('asistencia', 'can_view');
   if (!session) return;
   currentSessionRole = session.role;
   if (session.role !== 'admin') {

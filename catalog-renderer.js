@@ -642,7 +642,7 @@ document.getElementById('chk-only-missing-recipe').addEventListener('change', (e
 });
 
 document.addEventListener('DOMContentLoaded', async () => {
-  guardSession(['admin']);
+  guardPermission('catalogo', 'can_view');
   await loadRecipeSupportData();
   await loadModifiersData();
   await loadComboData();

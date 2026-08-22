@@ -292,7 +292,7 @@ document.getElementById('btn-cerrar-corte').addEventListener('click', async () =
 });
 
 document.addEventListener('DOMContentLoaded', async () => {
-  await guardSession(['admin', 'cajero']);
+  await guardPermission('corte', 'can_view');
   const fechaInput = document.getElementById('corte-fecha');
   fechaInput.value = todayISO();
   fechaInput.max = todayISO();

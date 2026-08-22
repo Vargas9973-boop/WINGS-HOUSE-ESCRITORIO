@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wings House - Ajustes</title>
   <link rel="stylesheet" href="common.css">
@@ -21,6 +21,30 @@
     </header>
 
     <div class="module-body" style="max-width: 720px;">
+      <div class="panel" style="margin-bottom:20px;">
+        <div class="panel-title">Marca / Logo</div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          El logo aparece en el header de cada pantalla y en el login. Formatos: PNG, JPG o WEBP.
+        </p>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:14px;">
+            <img id="set-logo-preview" src="logo.png" alt="Logo actual" style="width:64px; height:64px; object-fit:contain; border:1px solid var(--border-color); border-radius:8px; background:#fff;">
+            <div>
+              <input type="file" id="set-logo-file" accept="image/png,image/jpeg,image/webp">
+              <div id="set-logo-status" style="font-size:0.78rem; color:var(--text-muted); margin-top:4px;"></div>
+            </div>
+          </div>
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:10px;">
+            <input type="checkbox" id="set-theme-auto" style="width:auto;">
+            <label for="set-theme-auto" style="margin:0;">Cambiar colores del sistema acorde al logotipo</label>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <span style="font-size:0.78rem; color:var(--text-muted);">Colores detectados: </span>
+            <span id="set-theme-preview" style="display:inline-flex; gap:6px; vertical-align:middle;"></span>
+          </div>
+        </div>
+      </div>
+
       <div class="panel" style="margin-bottom:20px;">
         <div class="panel-title">Datos del negocio (aparecen en el ticket)</div>
         <div class="form-grid">
@@ -174,6 +198,49 @@
           </div>
           <div class="field" style="align-self:end;">
             <button id="btn-add-driver" type="button" class="btn btn-outline">+ Agregar repartidor</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Beneficio a empleados</div>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:10px;">
+            <input type="checkbox" id="set-benefit-enabled" style="width:auto;">
+            <label for="set-benefit-enabled" style="margin:0;">Habilitar beneficio a empleados</label>
+          </div>
+          <div class="field">
+            <label>Cantidad diaria (MXN)</label>
+            <input type="number" id="set-benefit-amount" min="0.01" step="1">
+          </div>
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:10px;">
+            <input type="checkbox" id="set-benefit-counts-as-sale" style="width:auto;">
+            <label for="set-benefit-counts-as-sale" style="margin:0;">Contar el beneficio como venta en reportes</label>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <span style="color:var(--text-muted); font-size:0.78rem;">
+              La cantidad diaria NO forma parte de lo que se cobra (no se cobra); el excedente sobre esa cantidad SÍ.
+              Este checkbox solo afecta cómo se ve en reportes -- no cambia el cobro.
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Crédito semanal de empleados</div>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:10px;">
+            <input type="checkbox" id="set-weekly-credit-enabled" style="width:auto;">
+            <label for="set-weekly-credit-enabled" style="margin:0;">Habilitar crédito semanal</label>
+          </div>
+          <div class="field">
+            <label>Tope límite semanal (MXN)</label>
+            <input type="number" id="set-weekly-credit-limit" min="0.01" step="1">
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <span style="color:var(--text-muted); font-size:0.78rem;">
+              Si el crédito acumulado de la semana llegara a superar el tope, la venta se rechaza.
+            </span>
           </div>
         </div>
       </div>

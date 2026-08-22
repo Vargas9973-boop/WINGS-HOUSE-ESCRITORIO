@@ -1381,16 +1381,8 @@ btnBack.addEventListener('click', () => {
 // INICIALIZACIÓN
 // ==========================================================================
 document.addEventListener('DOMContentLoaded', async () => {
-  const session = await window.auth.getSession();
-  if (!session) {
-    window.api.sendAction('open-login');
-    return;
-  }
-  if (!['admin', 'cajero'].includes(session.role)) {
-    alert('No tienes permiso para acceder a Ventas.');
-    window.api.sendAction('open-menu');
-    return;
-  }
+  const session = await guardPermission('ventas', 'can_view');
+  if (!session) return;
   folioPreview.textContent = session.displayName;
   ensureEmployeeSelector();
   updateEmployeeSelectorVisibility();

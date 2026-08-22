@@ -3,6 +3,8 @@
 // necesita main.js, para que el resto de la app (preload, renderers, html)
 // no tenga que cambiar absolutamente nada.
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const supabase = require('./supabaseClient');
 
 // ==========================================================================
@@ -184,12 +186,33 @@ async function login(username, password) {
     throw new Error('La cuenta no tiene una contraseña configurada correctamente.');
   }
 
+  // Permisos por módulo (Cuentas -> Roles): si el usuario no tiene role_id
+  // (instalación previa a esta función, o el rol se borró) la RPC devuelve
+  // vacío -- no rompe el login, hasPermission() cae al criterio viejo
+  // (role === 'admin') cuando el arreglo de permisos viene vacío.
+  const permissions = await getUserPermissions(user.id);
+
   return {
     id: user.id,
     username: user.username,
     displayName: user.name,
-    role: user.role
+    role: user.role,
+    roleId: user.role_id || null,
+    permissions
   };
+}
+
+// Devuelve [] en vez de tronar si la RPC falla (rol borrado, instalación
+// vieja sin backfill, etc.) -- el login nunca debe fallar por esto.
+async function getUserPermissions(userId) {
+  try {
+    const { data, error } = await supabase.rpc('get_user_permissions', { p_user_id: userId });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('No se pudieron obtener los permisos del usuario:', err.message || err);
+    return [];
+  }
 }
 
 async function changePassword(userId, newPassword) {
@@ -206,12 +229,31 @@ async function changePassword(userId, newPassword) {
 async function getAllUsers() {
   const { data, error } = await supabase
     .from('users')
-    .select('id, username, display_name:name, role, active, created_at')
+    .select('id, username, display_name:name, role, role_id, active, created_at, roles(name, is_system)')
     .eq('branch_id', getCurrentBranchId())
     .order('role', { ascending: true })
     .order('username', { ascending: true });
   must(error, 'No se pudieron obtener las cuentas');
-  return data;
+  return (data || []).map((u) => ({ ...u, roleName: u.roles ? u.roles.name : null, roles: undefined }));
+}
+
+// role_id es la fuente de verdad nueva (Cuentas -> Roles); `role` (texto,
+// 'admin'/'cajero'/...) se sigue rellenando en minúsculas desde el nombre
+// del rol elegido para no romper el resto del código que todavía lo lee
+// (login, guardSession(['admin',...]) que aún no se hayan migrado, etc.).
+async function resolveRoleForUser(roleId, fallbackRoleText) {
+  if (roleId) {
+    const { data: role, error } = await supabase
+      .from('roles')
+      .select('id, name')
+      .eq('id', roleId)
+      .eq('branch_id', getCurrentBranchId())
+      .maybeSingle();
+    must(error, 'No se pudo verificar el rol');
+    if (!role) throw new Error('El rol seleccionado no existe en esta sucursal.');
+    return { roleId: role.id, roleText: role.name.toLowerCase() };
+  }
+  return { roleId: null, roleText: fallbackRoleText || 'cajero' };
 }
 
 async function createUser(data) {
@@ -221,12 +263,14 @@ async function createUser(data) {
   must(exErr);
   if (existing) throw new Error('Ese nombre de usuario ya existe.');
   const { salt, hash } = makeCredentials(data.password || '123456');
+  const { roleId, roleText } = await resolveRoleForUser(data.roleId, data.role);
   const { data: created, error } = await supabase
     .from('users')
     .insert([{
       username,
       name: data.display_name || username,
-      role: data.role || 'cajero',
+      role: roleText,
+      role_id: roleId,
       // Columna legacy NOT NULL en Supabase; se rellena con el hash (no en
       // texto plano) para no violar la restricción sin exponer la contraseña.
       password: hash,
@@ -235,16 +279,18 @@ async function createUser(data) {
       active: data.active !== false,
       branch_id: getCurrentBranchId()
     }])
-    .select('id, username, display_name:name, role, active')
+    .select('id, username, display_name:name, role, role_id, active')
     .single();
   must(error, 'No se pudo crear la cuenta');
   return created;
 }
 
 async function updateUser(id, data) {
+  const { roleId, roleText } = await resolveRoleForUser(data.roleId, data.role);
   const patch = {
     name: data.display_name,
-    role: data.role || 'cajero',
+    role: roleText,
+    role_id: roleId,
     active: data.active !== false
   };
   const { error } = await supabase.from('users').update(patch).eq('id', id).eq('branch_id', getCurrentBranchId());
@@ -255,7 +301,7 @@ async function updateUser(id, data) {
     must(pwErr, 'No se pudo actualizar la contraseña');
   }
   const { data: row, error: selErr } = await supabase
-    .from('users').select('id, username, display_name:name, role, active').eq('id', id).eq('branch_id', getCurrentBranchId()).single();
+    .from('users').select('id, username, display_name:name, role, role_id, active').eq('id', id).eq('branch_id', getCurrentBranchId()).single();
   must(selErr);
   return row;
 }
@@ -264,6 +310,65 @@ async function removeUser(id) {
   const { error } = await supabase.from('users').update({ active: false }).eq('id', id).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo desactivar la cuenta');
   return { deactivated: true };
+}
+
+// ==========================================================================
+// 1B. ROLES Y PERMISOS (Cuentas -> "Permisos por rol")
+// ==========================================================================
+async function getRoles() {
+  const { data, error } = await supabase.rpc('get_roles_by_branch', { p_branch_id: getCurrentBranchId() });
+  must(error, 'No se pudieron obtener los roles');
+  return data || [];
+}
+
+async function createRole(data) {
+  const { data: row, error } = await supabase.rpc('create_role', {
+    p_branch_id: getCurrentBranchId(),
+    p_name: data.name,
+    p_description: data.description || null
+  });
+  must(error, 'No se pudo crear el rol');
+  return row;
+}
+
+async function updateRole(id, data) {
+  const { data: row, error } = await supabase.rpc('update_role', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_name: data.name,
+    p_description: data.description || null
+  });
+  must(error, 'No se pudo actualizar el rol');
+  return row;
+}
+
+async function removeRole(id) {
+  const { error } = await supabase.rpc('remove_role', { p_branch_id: getCurrentBranchId(), p_id: id });
+  must(error, 'No se pudo eliminar el rol');
+  return { deleted: true };
+}
+
+async function getRolePermissions(roleId) {
+  const { data, error } = await supabase.rpc('get_role_permissions', {
+    p_branch_id: getCurrentBranchId(),
+    p_role_id: roleId
+  });
+  must(error, 'No se pudieron obtener los permisos del rol');
+  return data || [];
+}
+
+// permissions: [{ module, can_view, can_create, can_edit, can_delete }, ...]
+// -- siempre manda el arreglo completo de los 13 módulos, la RPC hace upsert
+// de cada uno (no borra los que falten, así que si la UI omite un módulo
+// por error, ese permiso simplemente no cambia -- no queda en blanco).
+async function setRolePermissions(roleId, permissions) {
+  const { data, error } = await supabase.rpc('set_role_permissions', {
+    p_branch_id: getCurrentBranchId(),
+    p_role_id: roleId,
+    p_permissions: permissions || []
+  });
+  must(error, 'No se pudo guardar los permisos del rol');
+  return data;
 }
 
 // ==========================================================================
@@ -428,10 +533,26 @@ function mapCartItems(items) {
   }));
 }
 
+// Beneficio diario/crédito semanal configurables desde Ajustes (Settings,
+// key-value): antes 100/500 estaban hardcodeados dentro de process_sale.
+// Fallback a los mismos valores de siempre si la key no existe (instalación
+// previa a este ajuste) o viene corrupta.
+async function getEmployeeBenefitSettings() {
+  const settings = await getAllSettings();
+  return {
+    benefitEnabled: settings.benefit_enabled !== 'false',
+    benefitDailyAmount: Number(settings.benefit_daily_amount) > 0 ? Number(settings.benefit_daily_amount) : 100,
+    weeklyCreditEnabled: settings.weekly_credit_enabled !== 'false',
+    weeklyCreditLimit: Number(settings.weekly_credit_limit) > 0 ? Number(settings.weekly_credit_limit) : 500
+  };
+}
+
 async function createSale(payload, openedBy, cashierId) {
   if (!payload || !Array.isArray(payload.items) || payload.items.length === 0) {
     throw new Error('La venta no contiene artículos.');
   }
+
+  const benefitSettings = await getEmployeeBenefitSettings();
 
   const { data, error } = await supabase.rpc('process_sale', {
     p_branch_id: getCurrentBranchId(),
@@ -447,7 +568,11 @@ async function createSale(payload, openedBy, cashierId) {
       ? Number(payload.employeeId)
       : null,
     p_employee_sale_type: payload.employeeSaleType || null,
-    p_employee_extra_payment: payload.employeeExtraPayment || null
+    p_employee_extra_payment: payload.employeeExtraPayment || null,
+    p_benefit_enabled: benefitSettings.benefitEnabled,
+    p_benefit_daily_amount: benefitSettings.benefitDailyAmount,
+    p_weekly_credit_enabled: benefitSettings.weeklyCreditEnabled,
+    p_weekly_credit_limit: benefitSettings.weeklyCreditLimit
   });
 
   must(error, 'No se pudo registrar la venta');
@@ -2795,6 +2920,33 @@ async function setSetting(key, value) {
   return true;
 }
 
+// Logo del negocio (Ajustes -> SaaS). Sube a Storage (bucket "logos",
+// público) bajo una ruta por sucursal, y guarda la URL pública resultante
+// como un ajuste normal (logo_url), igual que cualquier otra key de
+// settings -- no se agregó ninguna columna nueva a la tabla, es key-value.
+async function uploadLogo(filePath, originalFileName) {
+  const ext = (path.extname(originalFileName || '') || '.png').toLowerCase();
+  const MIME_BY_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+  const contentType = MIME_BY_EXT[ext];
+  if (!contentType) throw new Error('Formato de imagen no soportado. Usa PNG, JPG o WEBP.');
+
+  const buffer = fs.readFileSync(filePath);
+  const storagePath = `${getCurrentBranchId()}/logo-${Date.now()}${ext}`;
+
+  const { error: upErr } = await supabase.storage
+    .from('logos')
+    .upload(storagePath, buffer, { contentType, upsert: true });
+  must(upErr, 'No se pudo subir el logo');
+
+  const { data: pub } = supabase.storage.from('logos').getPublicUrl(storagePath);
+  const logoUrl = pub.publicUrl;
+
+  await setSetting('logo_url', logoUrl);
+  await setSetting('logo_updated_at', new Date().toISOString());
+
+  return { logoUrl };
+}
+
 // Lector de huella biométrico (Ajustes -> Asistencia/Biometría). Igual que
 // getPayrollSettings: un valor JSON guardado bajo una sola key de settings.
 // Default siempre deshabilitado -- si la key no existe (instalación previa
@@ -2963,5 +3115,15 @@ module.exports = {
   // biometría
   getBiometricSettings,
   saveFingerprint,
-  clearFingerprint
+  clearFingerprint,
+  uploadLogo,
+  getEmployeeBenefitSettings,
+  // roles y permisos
+  getRoles,
+  createRole,
+  updateRole,
+  removeRole,
+  getRolePermissions,
+  setRolePermissions,
+  getUserPermissions
 };

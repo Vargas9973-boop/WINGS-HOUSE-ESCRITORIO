@@ -23,6 +23,24 @@ async function loadSettings() {
   }
   document.getElementById('set-payroll-payday').value = String(paydayNumber);
 
+  if (settings.logo_url) {
+    document.getElementById('set-logo-preview').src = settings.logo_url;
+  }
+  document.getElementById('set-theme-auto').checked = settings.theme_auto === 'true';
+  if (settings.theme_colors) {
+    try {
+      renderThemePreview(JSON.parse(settings.theme_colors));
+    } catch {
+      // valor corrupto: sin preview, no rompe el resto del formulario
+    }
+  }
+
+  document.getElementById('set-benefit-enabled').checked = settings.benefit_enabled !== 'false';
+  document.getElementById('set-benefit-amount').value = Number(settings.benefit_daily_amount) > 0 ? settings.benefit_daily_amount : '100';
+  document.getElementById('set-benefit-counts-as-sale').checked = settings.benefit_counts_as_sale === 'true';
+  document.getElementById('set-weekly-credit-enabled').checked = settings.weekly_credit_enabled !== 'false';
+  document.getElementById('set-weekly-credit-limit').value = Number(settings.weekly_credit_limit) > 0 ? settings.weekly_credit_limit : '500';
+
   await loadPrinters(settings.printer_name || '');
 
   let biometric = { enabled: false, model: 'u_are_u_4500' };
@@ -107,6 +125,154 @@ async function loadPrinters(selected) {
 
 document.getElementById('btn-refresh-printers').addEventListener('click', () => loadPrinters(document.getElementById('set-printer-name').value));
 
+// ==========================================================================
+// MARCA / LOGO -- sube a Supabase Storage (bucket "logos") y guarda la URL
+// pública en settings.logo_url (key-value normal, no hay columnas nuevas
+// en la tabla). Si "theme_auto" está marcado, extrae 2 colores dominantes
+// de la imagen con un <canvas> oculto (sin librería externa) y los aplica
+// de inmediato a --brand-orange/--brand-red (ver loadAndApplyBranding en
+// common.js) además de guardarlos.
+// ==========================================================================
+let pendingThemeColors = null; // { primary, secondary } del último logo subido/analizado
+
+// Reduce la imagen a un canvas chico y cuenta qué color (cuantizado a
+// bloques de 32 por canal, para agrupar tonos parecidos) aparece más veces.
+// Los 2 colores más frecuentes que además se distinguen entre sí (no dos
+// tonos casi iguales) se toman como primario/secundario. Ignora píxeles
+// casi blancos/negros/transparentes (suelen ser fondo, no la marca).
+function extractDominantColors(img) {
+  const size = 48;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, size, size);
+
+  let pixels;
+  try {
+    pixels = ctx.getImageData(0, 0, size, size).data;
+  } catch (err) {
+    console.error('No se pudo leer los píxeles del logo (canvas tainted):', err);
+    return null;
+  }
+
+  const counts = new Map();
+  for (let i = 0; i < pixels.length; i += 4) {
+    const r = pixels[i];
+    const g = pixels[i + 1];
+    const b = pixels[i + 2];
+    const a = pixels[i + 3];
+    if (a < 128) continue;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    if (max > 235 && min > 220) continue; // casi blanco
+    if (max < 25) continue; // casi negro
+    const key = [Math.round(r / 32), Math.round(g / 32), Math.round(b / 32)].join(',');
+    const entry = counts.get(key) || { r: 0, g: 0, b: 0, count: 0 };
+    entry.r += r;
+    entry.g += g;
+    entry.b += b;
+    entry.count += 1;
+    counts.set(key, entry);
+  }
+
+  const sorted = [...counts.values()]
+    .map((e) => ({ r: Math.round(e.r / e.count), g: Math.round(e.g / e.count), b: Math.round(e.b / e.count), count: e.count }))
+    .sort((a, b) => b.count - a.count);
+
+  if (sorted.length === 0) return null;
+
+  const toHex = (c) => `#${[c.r, c.g, c.b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  const colorDistance = (a, b) => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b);
+
+  const primary = sorted[0];
+  // El secundario es el siguiente color suficientemente distinto del
+  // primario -- si no hay ninguno (logo prácticamente monocromo), se repite
+  // el mismo tono.
+  const secondary = sorted.find((c) => colorDistance(c, primary) > 60) || primary;
+
+  return { primary: toHex(primary), secondary: toHex(secondary) };
+}
+
+function renderThemePreview(colors) {
+  const el = document.getElementById('set-theme-preview');
+  if (!el) return;
+  if (!colors) {
+    el.innerHTML = '';
+    return;
+  }
+  const swatch = (hex) => `<span style="display:inline-block; width:18px; height:18px; border-radius:4px; background:${hex}; border:1px solid var(--border-color);" title="${hex}"></span>`;
+  el.innerHTML = swatch(colors.primary) + swatch(colors.secondary);
+}
+
+document.getElementById('set-logo-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('set-logo-status');
+  const preview = document.getElementById('set-logo-preview');
+  statusEl.textContent = 'Subiendo logo...';
+
+  try {
+    // Preview + extracción de color instantáneos con un data URL local,
+    // sin esperar la subida a Storage.
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = dataUrl;
+    });
+
+    preview.src = dataUrl;
+
+    if (document.getElementById('set-theme-auto').checked) {
+      pendingThemeColors = extractDominantColors(img);
+      renderThemePreview(pendingThemeColors);
+      if (pendingThemeColors) {
+        document.documentElement.style.setProperty('--brand-orange', pendingThemeColors.primary);
+        document.documentElement.style.setProperty('--brand-red', pendingThemeColors.secondary);
+      }
+    }
+
+    const filePath = window.db.settings.getFilePath(file);
+    const result = await window.db.settings.uploadLogo(filePath, file.name);
+    preview.src = result.logoUrl;
+    statusEl.textContent = 'Logo actualizado.';
+    toast('Logo actualizado.', 'success');
+    if (window.loadAndApplyBranding) window.loadAndApplyBranding();
+  } catch (err) {
+    console.error('No se pudo subir el logo:', err);
+    statusEl.textContent = 'No se pudo subir el logo.';
+    toast('No se pudo subir el logo.', 'error');
+  }
+});
+
+document.getElementById('set-theme-auto').addEventListener('change', (e) => {
+  if (e.target.checked) {
+    // Si ya hay un logo cargado en el preview, extrae colores de una vez en
+    // vez de esperar a que se suba uno nuevo.
+    const preview = document.getElementById('set-logo-preview');
+    if (preview && preview.complete && preview.naturalWidth > 0) {
+      pendingThemeColors = extractDominantColors(preview);
+      renderThemePreview(pendingThemeColors);
+      if (pendingThemeColors) {
+        document.documentElement.style.setProperty('--brand-orange', pendingThemeColors.primary);
+        document.documentElement.style.setProperty('--brand-red', pendingThemeColors.secondary);
+      }
+    }
+  } else {
+    pendingThemeColors = null;
+    renderThemePreview(null);
+    restoreDefaultTheme();
+  }
+});
+
 // Imprime de inmediato con la impresora/ancho seleccionados en pantalla
 // (aunque todavía no se hayan guardado), guardándolos primero, para que la
 // prueba siempre refleje lo que el usuario está a punto de guardar.
@@ -137,6 +303,22 @@ document.getElementById('btn-print-test').addEventListener('click', async (ev) =
 document.getElementById('btn-save-settings').addEventListener('click', async () => {
   const paydayNumber = Number(document.getElementById('set-payroll-payday').value);
 
+  // Number(value) > 0, no solo "!value" (ver mismo fix en catalog-renderer.js):
+  // un "0" tecleado literal es un string no vacío y pasaría una validación
+  // que solo revisara `!value`.
+  const benefitAmountRaw = document.getElementById('set-benefit-amount').value;
+  const weeklyLimitRaw = document.getElementById('set-weekly-credit-limit').value;
+  if (!(Number(benefitAmountRaw) > 0)) {
+    toast('La cantidad diaria del beneficio debe ser mayor a $0.', 'error');
+    return;
+  }
+  if (!(Number(weeklyLimitRaw) > 0)) {
+    toast('El tope de crédito semanal debe ser mayor a $0.', 'error');
+    return;
+  }
+
+  const themeAuto = document.getElementById('set-theme-auto').checked;
+
   const entries = {
     business_name: document.getElementById('set-business-name').value.trim() || 'Wings House',
     business_address: document.getElementById('set-business-address').value.trim(),
@@ -150,8 +332,22 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     biometric_enabled: JSON.stringify({
       enabled: document.getElementById('set-biometric-enabled').checked,
       model: document.getElementById('set-biometric-model').value
-    })
+    }),
+    theme_auto: themeAuto ? 'true' : 'false',
+    benefit_enabled: document.getElementById('set-benefit-enabled').checked ? 'true' : 'false',
+    benefit_daily_amount: benefitAmountRaw,
+    benefit_counts_as_sale: document.getElementById('set-benefit-counts-as-sale').checked ? 'true' : 'false',
+    weekly_credit_enabled: document.getElementById('set-weekly-credit-enabled').checked ? 'true' : 'false',
+    weekly_credit_limit: weeklyLimitRaw
   };
+
+  // theme_colors solo se guarda si theme_auto está activo y ya se extrajeron
+  // colores de un logo (subido en esta sesión o ya guardado antes); si se
+  // desactiva, se deja de mandar (loadAndApplyBranding ya restaura el
+  // default cuando theme_auto='false', sin necesitar borrar el valor viejo).
+  if (themeAuto && pendingThemeColors) {
+    entries.theme_colors = JSON.stringify(pendingThemeColors);
+  }
 
   try {
     for (const [key, value] of Object.entries(entries)) {
@@ -163,8 +359,12 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     localStorage.setItem(ALERT_MUTE_KEY, enabled ? '0' : '1');
     localStorage.setItem(ALERT_VOLUME_KEY, String(volumePct / 100));
 
-    toast('Ajustes guardados correctamente.', 'success');
+    if (!themeAuto) restoreDefaultTheme();
+    if (window.loadAndApplyBranding) await window.loadAndApplyBranding();
+
+    toast('Ajustes aplicados.', 'success');
   } catch (err) {
+    console.error('No se pudieron guardar los ajustes:', err);
     toast('No se pudieron guardar los ajustes.', 'error');
   }
 });
@@ -252,7 +452,7 @@ document.getElementById('btn-add-driver')?.addEventListener('click', async () =>
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-  guardSession(['admin']);
+  guardPermission('ajustes', 'can_view');
   loadSettings();
   loadDriversLiquidation();
 });

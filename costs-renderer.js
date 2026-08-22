@@ -199,7 +199,7 @@ function escapeHtml(str) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  guardSession(['admin']);
+  guardPermission('costos', 'can_view');
   document.getElementById('filter-from').value = firstOfMonthISO();
   document.getElementById('filter-to').value = todayISO();
   loadReport();

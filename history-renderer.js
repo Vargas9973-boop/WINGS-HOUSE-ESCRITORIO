@@ -330,7 +330,7 @@ function escapeHtmlHist(str) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const session = await guardSession(['admin']);
+  const session = await guardPermission('historial', 'can_view');
   if (!session) return;
   document.getElementById('hist-from').value = todayISO();
   document.getElementById('hist-to').value = todayISO();

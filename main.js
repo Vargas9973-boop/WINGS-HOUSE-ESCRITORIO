@@ -580,6 +580,23 @@ function registerIpcHandlers() {
     }
   }
 
+  // Reemplazo gradual de requireAdmin(): 'admin' (texto legado) siempre
+  // pasa, sin importar permissions (nunca debe poder quedar fuera de su
+  // propia app); para el resto, revisa el arreglo de permisos que login()
+  // ya adjuntó a la sesión (get_user_permissions). Si el usuario no tiene
+  // role_id todavía (instalación sin migrar), permissions viene vacío y
+  // esto deniega -- mismo criterio conservador que requireAdmin() ya tenía
+  // para cualquiera que no fuera 'admin'.
+  function requirePermission(moduleName, action) {
+    if (!currentSession) throw new Error('No hay sesión activa.');
+    if (currentSession.role === 'admin') return;
+    const perms = currentSession.permissions || [];
+    const modPerm = perms.find((p) => p.module === moduleName);
+    if (!modPerm || !modPerm[action]) {
+      throw new Error('No tienes permiso para realizar esta acción.');
+    }
+  }
+
   // ------------------------------------------------------------------
   // AUTENTICACIÓN Y CUENTAS
   // ------------------------------------------------------------------
@@ -605,24 +622,52 @@ function registerIpcHandlers() {
   });
 
   safeHandle('users:getAll', () => {
-    requireAdmin();
+    requirePermission('cuentas', 'can_view');
     return db.getAllUsers();
   });
 
   safeHandle('users:create', (data) => {
-    requireAdmin();
+    requirePermission('cuentas', 'can_create');
     return db.createUser(data);
   });
 
   safeHandle('users:update', (id, data) => {
-    requireAdmin();
+    requirePermission('cuentas', 'can_edit');
     return db.updateUser(id, data);
   });
 
   safeHandle('users:remove', (id) => {
-    requireAdmin();
+    requirePermission('cuentas', 'can_delete');
     if (currentSession.id === id) throw new Error('No puedes eliminar la cuenta con la que iniciaste sesión.');
     return db.removeUser(id);
+  });
+
+  // ------------------------------------------------------------------
+  // ROLES Y PERMISOS (Cuentas -> "Permisos por rol")
+  // ------------------------------------------------------------------
+  safeHandle('roles:getAll', () => {
+    requirePermission('cuentas', 'can_view');
+    return db.getRoles();
+  });
+  safeHandle('roles:create', (data) => {
+    requirePermission('cuentas', 'can_create');
+    return db.createRole(data);
+  });
+  safeHandle('roles:update', (id, data) => {
+    requirePermission('cuentas', 'can_edit');
+    return db.updateRole(id, data);
+  });
+  safeHandle('roles:remove', (id) => {
+    requirePermission('cuentas', 'can_delete');
+    return db.removeRole(id);
+  });
+  safeHandle('roles:getPermissions', (roleId) => {
+    requirePermission('cuentas', 'can_view');
+    return db.getRolePermissions(roleId);
+  });
+  safeHandle('roles:setPermissions', (roleId, permissions) => {
+    requirePermission('cuentas', 'can_edit');
+    return db.setRolePermissions(roleId, permissions);
   });
 
   // ------------------------------------------------------------------
@@ -894,6 +939,7 @@ function registerIpcHandlers() {
   // ------------------------------------------------------------------
   safeHandle('settings:getAll', () => db.getAllSettings());
   safeHandle('settings:set', (key, value) => db.setSetting(key, value));
+  safeHandle('settings:uploadLogo', (filePath, fileName) => db.uploadLogo(filePath, fileName));
 
   // ------------------------------------------------------------------
   // EXPORTACIÓN DE REPORTES (CSV y reporte imprimible)

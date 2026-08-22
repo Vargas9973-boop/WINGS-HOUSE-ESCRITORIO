@@ -139,6 +139,6 @@ function escapeHtml(str) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  guardSession(['admin']);
+  guardPermission('inventario', 'can_view');
   loadWaste();
 });

@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // Envuelve ipcRenderer.invoke y desempaqueta { ok, data, error }
 async function call(channel, ...args) {
@@ -101,7 +101,20 @@ contextBridge.exposeInMainWorld('db', {
   },
   settings: {
     getAll: () => call('settings:getAll'),
-    set: (key, value) => call('settings:set', key, value)
+    set: (key, value) => call('settings:set', key, value),
+    // webUtils.getPathForFile es el reemplazo moderno de file.path (retirado
+    // con contextIsolation) -- necesita correr aquí en preload, no en el
+    // renderer aislado.
+    getFilePath: (file) => webUtils.getPathForFile(file),
+    uploadLogo: (filePath, fileName) => call('settings:uploadLogo', filePath, fileName)
+  },
+  roles: {
+    getAll: () => call('roles:getAll'),
+    create: (data) => call('roles:create', data),
+    update: (id, data) => call('roles:update', id, data),
+    remove: (id) => call('roles:remove', id),
+    getPermissions: (roleId) => call('roles:getPermissions', roleId),
+    setPermissions: (roleId, permissions) => call('roles:setPermissions', roleId, permissions)
   },
   modifiers: {
     list: (groupName) => call('modifiers:list', groupName),

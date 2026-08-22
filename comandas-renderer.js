@@ -1961,31 +1961,9 @@ document.addEventListener(
     try {
 
       session =
-        await window.auth.getSession();
+        await guardPermission('comandas', 'can_view');
 
       if (!session) {
-
-        window.api.sendAction(
-          'open-login'
-        );
-
-        return;
-      }
-
-      if (
-        !['admin', 'cajero'].includes(
-          session.role
-        )
-      ) {
-
-        alert(
-          'No tienes permiso para acceder a Comandas.'
-        );
-
-        window.api.sendAction(
-          'open-menu'
-        );
-
         return;
       }
 

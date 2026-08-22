@@ -302,7 +302,7 @@ function escapeHtmlReports(str) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const session = await guardSession(['admin']);
+  const session = await guardPermission('reportes', 'can_view');
   if (!session) return;
   document.getElementById('filter-from').value = firstOfMonthISO();
   document.getElementById('filter-to').value = todayISO();

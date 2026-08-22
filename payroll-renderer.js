@@ -207,7 +207,7 @@ document.getElementById('btn-cerrar-nomina').addEventListener('click', async () 
 });
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const session = await guardSession(['admin']);
+  const session = await guardPermission('nomina', 'can_view');
   if (!session) return;
 
   try {

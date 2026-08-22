@@ -382,7 +382,7 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const session = await guardSession(['admin']);
+  const session = await guardPermission('inventario', 'can_view');
   if (!session) return;
   init();
 });
