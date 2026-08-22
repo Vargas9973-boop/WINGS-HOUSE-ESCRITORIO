@@ -842,6 +842,14 @@ function stockFor(id) {
 }
 
 function addToCart(item, qty = 1) {
+  // Un producto/promo con price NULL o 0 en el catálogo (mal cargado) no debe
+  // poder colarse a una venta real cobrando $0 -- ver mapCartItems en db.js,
+  // que hace `Number(item.price) || 0` sin validar, y process_sale, que
+  // multiplica unit_price*quantity tal cual sin rechazar 0.
+  if (!(Number(item.basePrice) > 0)) {
+    toast(`"${item.name}" no tiene un precio válido configurado. Revisa el catálogo antes de venderlo.`, 'error');
+    return;
+  }
   qty = Math.max(1, Math.min(999, Math.floor(Number(qty)) || 1));
   const modifierKey = (i) => (i.modifierIds || []).slice().sort((a, b) => a - b).join(',');
   const existing = cart.find((i) => i.id === item.id && i.itemType === item.itemType && modifierKey(i) === modifierKey(item));
@@ -1100,6 +1108,15 @@ amountReceivedInput.addEventListener('input', () => {
 btnConfirmCheckout.addEventListener('click', async () => {
   const { subtotal, discount, total } = cartTotals();
 
+  // Defensa en profundidad: addToCart ya rechaza precios inválidos al
+  // agregar, pero si por algún motivo el carrito llegara aquí con subtotal
+  // <= 0 (precio en $0, catálogo mal cargado) no debe registrarse una venta
+  // "completada" por $0 -- aborta antes de llamar a process_sale.
+  if (!(subtotal > 0)) {
+    toast('El carrito no tiene un total válido. Revisa los precios de los artículos.', 'error');
+    return;
+  }
+
   let amountReceived = null;
   let changeGiven = null;
 
@@ -1300,22 +1317,10 @@ btnConfirmCheckout.addEventListener('click', async () => {
       modifierIds: item.modifierIds && item.modifierIds.length ? item.modifierIds : undefined
     }))
   };
-  console.log('DEBUG PAYLOAD VENTA EMPLEADO:', {
-  subtotal: payload.subtotal,
-  discount: payload.discount,
-  total: payload.total,
-  employeeId: payload.employeeId,
-  employeeSaleType: payload.employeeSaleType,
-  employeeExtraPayment: payload.employeeExtraPayment,
-  paymentMethod: payload.paymentMethod,
-  items: payload.items
-});
 
   btnConfirmCheckout.disabled = true;
   try {
-    
     const sale = await window.db.sales.create(payload);
-    console.log('DEBUG PAYLOAD VENTA:', JSON.stringify(payload, null, 2));
     folioPreview.textContent = `Último ticket: ${sale.folio}`;
     toast(`Venta registrada: ${sale.folio}`, 'success');
     alertLowStockInsumos();
