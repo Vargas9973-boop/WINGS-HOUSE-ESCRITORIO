@@ -329,7 +329,8 @@ async function createProduct(data) {
     p_employee_price: data.employee_price ? Number(data.employee_price) : null,
     p_active: data.active !== false,
     p_sort_order: Number(data.sort_order) || 0,
-    p_stock: normalizeStock(data.stock)
+    p_stock: normalizeStock(data.stock),
+    p_cost_per_unit: data.cost_per_unit != null && data.cost_per_unit !== '' ? Number(data.cost_per_unit) : null
   });
   must(error, 'No se pudo crear el producto');
   return row;
@@ -345,7 +346,8 @@ async function updateProduct(id, data) {
     p_employee_price: data.employee_price ? Number(data.employee_price) : null,
     p_active: data.active !== false,
     p_sort_order: Number(data.sort_order) || 0,
-    p_stock: normalizeStock(data.stock)
+    p_stock: normalizeStock(data.stock),
+    p_cost_per_unit: data.cost_per_unit != null && data.cost_per_unit !== '' ? Number(data.cost_per_unit) : null
   });
   must(error, 'No se pudo actualizar el producto');
   return row;
@@ -1863,8 +1865,11 @@ async function getCorteByFecha(fecha) {
 // 9. REPORTES / RENTABILIDAD
 // ==========================================================================
 async function computeProfitability(dateFrom, dateTo) {
-  const fromTs = `${dateFrom}T00:00:00`;
-  const toTs = `${dateTo}T23:59:59.999`;
+  // Mismo bug de zona horaria ya corregido en getUnifiedHistory/getCorteResumen
+  // (string sin offset, Postgres lo interpreta en UTC del servidor, no en la
+  // hora local) -- esta función quedó pendiente en esa sesión, se cierra aquí.
+  const fromTs = localDayStartUtcIso(dateFrom);
+  const toTs = localDayEndUtcIso(dateTo);
 
   const { data: sales, error: salesErr } = await supabase
     .from('sales').select('total, payment_method, created_at')
@@ -1886,18 +1891,77 @@ async function computeProfitability(dateFrom, dateTo) {
   });
   must(itemsErr);
 
+  // Food cost / margen / valuación (feature nueva 2026-08-21): reusa lo que
+  // ya existe (getAllProducts, getAllRecipeCosts, getAllInventory), todo ya
+  // filtrado por sucursal -- no hace falta ninguna consulta extra a mano.
+  const [allProducts, recipeCostByProduct, allInventory] = await Promise.all([
+    getAllProducts(),
+    getAllRecipeCosts(),
+    getAllInventory()
+  ]);
+  const productsById = new Map((allProducts || []).map((p) => [p.id, p]));
+
+  // Costo de un producto: si tiene receta (stock NULL), el costo de receta
+  // ya calculado; si es "directo" (stock NOT NULL), su cost_per_unit propio
+  // -- null si nunca se capturó (margen desconocido, no se inventa un 0).
+  const foodCostOf = (product) => {
+    if (!product) return null;
+    if (product.stock == null) {
+      const recipeCost = recipeCostByProduct[product.id];
+      return recipeCost != null ? recipeCost : null;
+    }
+    return product.cost_per_unit != null ? Number(product.cost_per_unit) : null;
+  };
+
   const totalSales = (sales || []).reduce((sum, s) => sum + Number(s.total || 0), 0);
   const totalTickets = (sales || []).length;
   const totalWaste = (wasteRows || []).reduce((sum, w) => sum + Number(w.cost || 0), 0);
   const totalCosts = (costRows || []).reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
   const byProduct = {};
+  let cogs = 0;
+  let cogsUnknownCount = 0;
   (items || []).forEach((it) => {
     if (!byProduct[it.name]) byProduct[it.name] = { name: it.name, unidades: 0, total: 0 };
     byProduct[it.name].unidades += Number(it.quantity || 0);
     byProduct[it.name].total += Number(it.subtotal || 0);
+
+    // COGS solo cubre item_type='product' (con receta o costo directo
+    // capturado): un combo/promo (item_type='promo') se arma de varios
+    // productos vía product_components, que no se recorre aquí -- se deja
+    // fuera del costo de venta por ahora en vez de adivinar su costo.
+    if (it.item_type === 'product' && it.ref_id != null) {
+      const cost = foodCostOf(productsById.get(it.ref_id));
+      if (cost != null) {
+        cogs += cost * (Number(it.quantity) || 0);
+      } else {
+        cogsUnknownCount += 1;
+      }
+    }
   });
   const topProducts = Object.values(byProduct).sort((a, b) => b.total - a.total).slice(0, 8);
+
+  const productMargins = (allProducts || [])
+    .filter((p) => Number(p.price) > 0)
+    .map((p) => {
+      const foodCost = foodCostOf(p);
+      const margin = foodCost != null ? Number(p.price) - foodCost : null;
+      return {
+        id: p.id,
+        name: p.name,
+        price: Number(p.price),
+        isRecipe: p.stock == null,
+        foodCost,
+        margin,
+        marginPct: margin != null && Number(p.price) > 0 ? margin / Number(p.price) : null
+      };
+    })
+    .sort((a, b) => (a.marginPct ?? Infinity) - (b.marginPct ?? Infinity));
+
+  const inventoryValuation = (allInventory || []).reduce(
+    (sum, i) => sum + (Number(i.stock) || 0) * (Number(i.cost_per_unit) || 0),
+    0
+  );
 
   const byDayMap = {};
   (sales || []).forEach((s) => {
@@ -1924,7 +1988,16 @@ async function computeProfitability(dateFrom, dateTo) {
     netProfit: totalSales - totalWaste - totalCosts,
     topProducts,
     byDay,
-    byPayment: Object.values(byPaymentMap)
+    byPayment: Object.values(byPaymentMap),
+    // Food cost / margen / valuación: cogs y grossProfit solo cubren
+    // item_type='product' (ver cogsUnknownCount) -- combos/promos y
+    // productos directos sin cost_per_unit capturado quedan fuera del
+    // costo de venta, no se les inventa un valor.
+    cogs,
+    cogsUnknownCount,
+    grossProfit: totalSales - cogs,
+    productMargins,
+    inventoryValuation
   };
 }
 

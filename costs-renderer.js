@@ -22,10 +22,18 @@ async function loadReport() {
   renderKpis(report);
   renderChart(report.byDay);
   renderTopProducts(report.topProducts);
+  renderMargins(report.productMargins);
   renderCosts();
 }
 
 function renderKpis(report) {
+  // cogs/grossProfit solo cubren item_type='product' con costo conocido
+  // (receta o cost_per_unit directo) -- combos/promos y productos directos
+  // sin costo capturado quedan fuera; se avisa si eso aplicó en el rango.
+  const cogsNote = report.cogsUnknownCount > 0
+    ? `<div class="kpi-hint" style="font-size:11px; color:var(--text-muted); margin-top:4px;">${report.cogsUnknownCount} renglón(es) sin costo conocido, no incluidos</div>`
+    : '';
+
   document.getElementById('kpi-grid').innerHTML = `
     <div class="kpi-card success">
       <div class="kpi-label">Ventas totales</div>
@@ -47,7 +55,44 @@ function renderKpis(report) {
       <div class="kpi-label">Tickets vendidos</div>
       <div class="kpi-value">${report.totalTickets}</div>
     </div>
+    <div class="kpi-card warning">
+      <div class="kpi-label">Costo de venta (COGS)</div>
+      <div class="kpi-value">${fmtMoney(report.cogs)}</div>
+      ${cogsNote}
+    </div>
+    <div class="kpi-card ${report.grossProfit >= 0 ? 'success' : 'danger'}">
+      <div class="kpi-label">Utilidad bruta (ventas − COGS)</div>
+      <div class="kpi-value">${fmtMoney(report.grossProfit)}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Valuación de inventario (hoy)</div>
+      <div class="kpi-value">${fmtMoney(report.inventoryValuation)}</div>
+    </div>
   `;
+}
+
+function renderMargins(productMargins) {
+  const tbody = document.getElementById('margins-tbody');
+  if (!tbody) return;
+  if (!productMargins || productMargins.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">Sin productos con precio configurado.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = productMargins
+    .map((p) => {
+      const costCell = p.foodCost != null ? fmtMoney(p.foodCost) : '—';
+      const marginCell = p.margin != null ? fmtMoney(p.margin) : '—';
+      const pctCell = p.marginPct != null ? `${(p.marginPct * 100).toFixed(1)}%` : '—';
+      const pctClass = p.marginPct == null ? '' : p.marginPct < 0.3 ? 'danger' : p.marginPct < 0.5 ? 'warning' : 'success';
+      return `<tr>
+        <td>${escapeHtml(p.name)}${p.isRecipe ? '' : ' <span style="color:var(--text-muted); font-size:11px;">(directo)</span>'}</td>
+        <td>${fmtMoney(p.price)}</td>
+        <td>${costCell}</td>
+        <td>${marginCell}</td>
+        <td><span class="tag ${pctClass}">${pctCell}</span></td>
+      </tr>`;
+    })
+    .join('');
 }
 
 function renderChart(byDay) {

@@ -66,3 +66,8 @@
   color: var(--text-secondary);
   margin-bottom: 4px;
 }
+
+/* Margen por producto (tabla "Rentabilidad por producto") */
+.tag.success { background: rgba(22, 163, 74, 0.15); color: var(--accent-success); }
+.tag.warning { background: rgba(245, 158, 11, 0.15); color: var(--accent-warning); }
+.tag.danger { background: rgba(239, 68, 68, 0.15); color: var(--accent-danger); }

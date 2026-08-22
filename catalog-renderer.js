@@ -369,6 +369,7 @@ async function openProductModal(id = null) {
   document.getElementById('product-employee-price').value = p && p.employee_price != null ? p.employee_price : '';
   document.getElementById('product-active').value = p ? String(p.active) : '1';
   document.getElementById('product-stock').value = p && p.stock != null ? p.stock : '';
+  document.getElementById('product-cost').value = p && p.cost_per_unit != null ? p.cost_per_unit : '';
   const hasSauces = p ? productHasSaucesGroup(p.id) : false;
   document.getElementById('product-sauces-group').checked = hasSauces;
   document.getElementById('product-sauces-qty').value = p ? saucesGroupQty(p.id) : 1;
@@ -409,6 +410,7 @@ document.getElementById('btn-save-product').addEventListener('click', async () =
   const employeePriceRaw = document.getElementById('product-employee-price').value;
   const active = document.getElementById('product-active').value === '1';
   const stockRaw = document.getElementById('product-stock').value;
+  const costRaw = document.getElementById('product-cost').value;
 
   // Number(price) > 0, no solo "!price": un precio tecleado como "0" es un
   // string no vacío y pasaba la validación anterior, dejando guardar un
@@ -425,7 +427,11 @@ document.getElementById('btn-save-product').addEventListener('click', async () =
     price: Number(price),
     employee_price: employeePriceRaw ? Number(employeePriceRaw) : null,
     active,
-    stock: stockRaw !== '' ? Number(stockRaw) : null
+    stock: stockRaw !== '' ? Number(stockRaw) : null,
+    // Solo aplica a productos "directos" (con stock propio): los de receta
+    // ya calculan su costo desde recipes+inventory. Ver Costos ("Rentabilidad
+    // por producto"), que necesita esto para poder mostrar margen real.
+    cost_per_unit: costRaw !== '' ? Number(costRaw) : null
   };
 
   const recipeRows = collectRecipeRows();
