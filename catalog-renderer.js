@@ -410,8 +410,12 @@ document.getElementById('btn-save-product').addEventListener('click', async () =
   const active = document.getElementById('product-active').value === '1';
   const stockRaw = document.getElementById('product-stock').value;
 
-  if (!name || !price) {
-    toast('Nombre y precio son obligatorios.', 'error');
+  // Number(price) > 0, no solo "!price": un precio tecleado como "0" es un
+  // string no vacío y pasaba la validación anterior, dejando guardar un
+  // producto que luego se vendería gratis (mapCartItems/process_sale no lo
+  // rechazan si llega así desde el catálogo).
+  if (!name || !(Number(price) > 0)) {
+    toast('Nombre y un precio mayor a $0 son obligatorios.', 'error');
     return;
   }
 
@@ -587,8 +591,8 @@ document.getElementById('btn-save-promo').addEventListener('click', async () => 
   const active = document.getElementById('promo-active').value === '1';
   const applicableCategory = document.getElementById('promo-category').value || null;
 
-  if (!name || !price) {
-    toast('Nombre y precio son obligatorios.', 'error');
+  if (!name || !(Number(price) > 0)) {
+    toast('Nombre y un precio mayor a $0 son obligatorios.', 'error');
     return;
   }
 
