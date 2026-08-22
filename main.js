@@ -901,7 +901,7 @@ function registerIpcHandlers() {
   safeHandle('export:csv', async (type, dateFrom, dateTo) => {
     let headers = [];
     let rows = [];
-    const defaultName = `reporte_${type}_${dateFrom}_a_${dateTo}.csv`;
+    const defaultName = `reporte_${type}_sucursal${db.getCurrentBranchId()}_${dateFrom}_a_${dateTo}.csv`;
 
     if (type === 'ventas') {
       headers = ['Folio', 'Fecha', 'Mesa', 'Cliente', 'Subtotal', 'Descuento', 'Total', 'Pago', 'Cajero'];
@@ -969,7 +969,7 @@ function registerIpcHandlers() {
         r.fecha, HISTORY_TIPO_LABELS[r.tipo] || r.tipo, r.detalle, productos, money(r.total), r.metodoLabel, r.autorizoCliente, r.folio || ''
       ];
     });
-    const defaultName = `historial_${filters.startDate || 'inicio'}_a_${filters.endDate || 'hoy'}.csv`;
+    const defaultName = `historial_sucursal${db.getCurrentBranchId()}_${filters.startDate || 'inicio'}_a_${filters.endDate || 'hoy'}.csv`;
 
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Exportar historial a CSV',

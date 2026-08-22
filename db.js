@@ -623,13 +623,10 @@ async function getSaleById(id) {
 async function getAllSales(filters = {}) {
   let query = supabase.from('sales').select('*').eq('branch_id', getCurrentBranchId());
   if (filters.status) query = query.eq('status', filters.status);
-  if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T06:00:00.000Z`);
-  if (filters.dateTo) {
-    const d = new Date(filters.dateTo);
-    d.setDate(d.getDate() + 1);
-    const next = d.toISOString().split('T')[0];
-    query = query.lt('created_at', `${next}T06:00:00.000Z`);
-  }
+  // Antes hardcodeaba "Xalapa = UTC-6" a mano (mismo patrón ya corregido en
+  // getCorteResumen) -- unificado con localDayStartUtcIso/localDayEndUtcIso.
+  if (filters.dateFrom) query = query.gte('created_at', localDayStartUtcIso(filters.dateFrom));
+  if (filters.dateTo) query = query.lte('created_at', localDayEndUtcIso(filters.dateTo));
   query = query.order('id', { ascending: false });
   if (filters.limit) query = query.limit(Number(filters.limit));
   const { data, error } = await query;
@@ -682,8 +679,8 @@ async function getEmployeeDailyConsumption(employeeId) {
 // Resumen de artículos vendidos (ventas completadas) en un rango de fechas,
 // sin límite de filas — usado por el reporte/CSV de "productos".
 async function getProductsSummary(dateFrom, dateTo) {
-  const fromTs = `${dateFrom}T00:00:00`;
-  const toTs = `${dateTo}T23:59:59.999`;
+  const fromTs = localDayStartUtcIso(dateFrom);
+  const toTs = localDayEndUtcIso(dateTo);
   const { data: items, error } = await supabase.rpc('get_sale_items_summary', {
     p_branch_id: getCurrentBranchId(),
     p_from: fromTs,
@@ -2741,13 +2738,31 @@ async function getUnifiedHistory(filters = {}) {
     return true;
   });
   const sumTipo = (tipo) => kpiScope.filter((r) => r.tipo === tipo).reduce((sum, r) => sum + r.total, 0);
+
+  // COGS/margen (reusa computeProfitability, ya construido para Costos):
+  // es un agregado de TODA la sucursal en el rango de fechas, no se puede
+  // acotar a filters.employeeName/paymentMethod como el resto de los KPIs
+  // de arriba (requeriría recalcular costo por renglón sobre ese subconjunto,
+  // no solo sumar); se muestra igual, etiquetado como "del rango" en la UI.
+  let cogs = 0;
+  let grossProfit = 0;
+  try {
+    const profitability = await computeProfitability(startDate, endDate);
+    cogs = profitability.cogs;
+    grossProfit = profitability.grossProfit;
+  } catch (e) {
+    console.warn('No se pudo calcular COGS/margen para el historial:', e.message || e);
+  }
+
   const kpis = {
     ventasTotales: sumTipo('venta') + sumTipo('para_llevar') + sumTipo('domicilio'),
     consumoInterno: sumTipo('consumo_interno'),
     beneficioEmpleados: sumTipo('beneficio_empleado'),
     paraLlevar: sumTipo('para_llevar'),
     domicilio: sumTipo('domicilio'),
-    mermaTotal: sumTipo('merma')
+    mermaTotal: sumTipo('merma'),
+    cogs,
+    grossProfit
   };
 
   const filtered = rows.filter((r) => {

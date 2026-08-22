@@ -79,6 +79,10 @@ function renderKpis(report) {
       <div class="kpi-label">Tickets</div>
       <div class="kpi-value">${report.totalTickets}</div>
     </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Valuación de inventario (hoy)</div>
+      <div class="kpi-value">${fmtMoney(report.inventoryValuation)}</div>
+    </div>
   `;
 }
 

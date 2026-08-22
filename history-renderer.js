@@ -135,6 +135,14 @@ function renderKpis(kpis) {
       <div class="kpi-label">Merma total</div>
       <div class="kpi-value">${fmtMoney(kpis.mermaTotal)}</div>
     </div>
+    <div class="kpi-card warning">
+      <div class="kpi-label">Costo de venta del rango (COGS)</div>
+      <div class="kpi-value">${fmtMoney(kpis.cogs)}</div>
+    </div>
+    <div class="kpi-card ${kpis.grossProfit >= 0 ? 'success' : 'danger'}">
+      <div class="kpi-label">Utilidad bruta del rango</div>
+      <div class="kpi-value">${fmtMoney(kpis.grossProfit)}</div>
+    </div>
   `;
 }
 
