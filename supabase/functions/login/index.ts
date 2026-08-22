@@ -148,6 +148,22 @@ Deno.serve(async (req) => {
       return json({ error: "No se pudo iniciar sesión" }, 500);
     }
 
+    // public.users.auth_user_id (20260822120000_rls_restrictive_phase1.sql)
+    // es lo que current_branch_id() usa para resolver la sucursal del
+    // llamador en cada policy de RLS -- sin esto, un usuario nuevo (o
+    // cuyo auth.users se acaba de crear arriba) quedaría sin acceso a nada
+    // después de loguearse. Se sincroniza en cada login, no solo la
+    // primera vez, por si auth.users cambiara de id (ej. recreación manual).
+    if (linkData.user?.id && linkData.user.id !== user.auth_user_id) {
+      const { error: linkIdErr } = await admin
+        .from("users")
+        .update({ auth_user_id: linkData.user.id })
+        .eq("id", user.id);
+      if (linkIdErr) {
+        console.error("No se pudo persistir auth_user_id:", linkIdErr.message);
+      }
+    }
+
     const anonClient = createClient(SUPABASE_URL, ANON_KEY, {
       auth: { autoRefreshToken: false, persistSession: false },
     });

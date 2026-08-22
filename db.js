@@ -857,9 +857,18 @@ async function markSalePrinted(id) {
 // cantidad de artículos: hay como máximo un evento por comanda nueva.
 //
 // Requiere que la tabla public.sales esté agregada a la publicación
-// "supabase_realtime" en Supabase (Database > Replication) y que exista una
-// policy de SELECT para el rol anon (ya existe: sales_select_anon) — RLS se
-// aplica también a los eventos de Realtime.
+// "supabase_realtime" en Supabase (Database > Replication). Este canal se
+// abre en main.js justo después de db.init(), ANTES del login -- RLS
+// (20260822120000_rls_restrictive_phase1.sql) dejó `sales` visible solo
+// para `authenticated`, así que hasta que alguien inicie sesión este canal
+// no recibe eventos (Realtime aplica la misma RLS que REST). Se autocura
+// solo: supabase-js empuja el token nuevo a los canales ya abiertos cuando
+// login() hace auth.setSession(), sin necesitar recrear la suscripción
+// (verificado). La única ventana real perdida es entre el arranque de la
+// app y el primer login -- a diferencia del KDS "sin login" (ver línea
+// ~1417), que si nadie loguea NUNCA en toda la sesión, se queda sin
+// Realtime para siempre (por eso ese sí tiene respaldo de polling en
+// main.js, éste no lo necesita).
 function subscribeToNewSales(onInsert, onStatusChange) {
   return supabase
     .channel('sales-inserts')
@@ -1433,14 +1442,17 @@ const KDS_TIMESTAMP_COLUMN = {
 // Todo lo que la cocina todavía no entregó, con sus artículos. Se excluyen
 // las canceladas (canceladas antes de cocinar no deben seguir pidiendo que
 // se cocinen) aunque su kds_status nunca se haya tocado.
+//
+// get_kds_orders (RPC, SECURITY DEFINER, 20260822120000) reemplaza el
+// select directo a `sales` -- el KDS corre "sin login" (ver comentario
+// arriba), y desde esa migración `sales` es visible solo para
+// `authenticated`. El RPC valida branch_id server-side, igual que el resto
+// de los reads de esta función (get_sale_items_with_modifiers,
+// get_all_product_components_by_branch, ambos ya eran RPC desde antes).
 async function getKdsOrders() {
-  const { data: sales, error } = await supabase
-    .from('sales')
-    .select('id, table_number, client_type, folio, status, created_at, kds_status, kds_started_at, kds_ready_at, is_delivery, delivery_fee, driver_name, total')
-    .eq('branch_id', getCurrentBranchId())
-    .neq('kds_status', 'entregada')
-    .neq('status', 'cancelada')
-    .order('created_at', { ascending: true });
+  const { data: sales, error } = await supabase.rpc('get_kds_orders', {
+    p_branch_id: getCurrentBranchId()
+  });
   must(error, 'No se pudieron obtener las órdenes de cocina');
   if (!sales || sales.length === 0) return [];
 

@@ -273,6 +273,30 @@ async function refreshKdsWindow() {
   }
 }
 
+// Respaldo de polling para el KDS "sin login" (ver comentario en db.js
+// línea ~1417): supabase.subscribeToKdsChanges() usa Realtime sobre
+// `sales`, y Realtime respeta RLS -- desde
+// 20260822120000_rls_restrictive_phase1.sql, `sales` solo es visible para
+// `authenticated`, así que si nadie inició sesión en la ventana principal
+// (mismo proceso, mismo cliente de Supabase compartido) el canal de
+// Realtime deja de recibir eventos para este KDS y se queda congelado sin
+// este respaldo. Si SÍ hay sesión (alguien logueado en la ventana
+// principal), Realtime sigue dando el refresco instantáneo de siempre --
+// esto es solo una red de seguridad, no un reemplazo.
+let kdsPollInterval = null;
+
+function startKdsPolling() {
+  stopKdsPolling();
+  kdsPollInterval = setInterval(refreshKdsWindow, 15000);
+}
+
+function stopKdsPolling() {
+  if (kdsPollInterval) {
+    clearInterval(kdsPollInterval);
+    kdsPollInterval = null;
+  }
+}
+
 // Crea (o enfoca, si ya existe) la ventana de la TV de cocina. `screen` se
 // requiere aquí adentro -- nunca al inicio del archivo -- porque la API de
 // pantallas de Electron solo es válida después de que la app está 'ready';
@@ -315,7 +339,8 @@ function createKDSWindow() {
     refreshKdsWindow();
     kdsWindow.webContents.send('kds:online', isRealtimeConnected);
   });
-  kdsWindow.on('closed', () => { kdsWindow = null; });
+  startKdsPolling();
+  kdsWindow.on('closed', () => { kdsWindow = null; stopKdsPolling(); });
 
   return kdsWindow;
 }
