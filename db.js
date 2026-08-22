@@ -867,7 +867,12 @@ function subscribeToNewSales(onInsert, onStatusChange) {
 // 5. COMANDAS (mesas)
 // ==========================================================================
 async function getSettingValue(key, fallback) {
-  const { data, error } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
+  const { data, error } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', key)
+    .eq('branch_id', getCurrentBranchId())
+    .maybeSingle();
   if (error || !data) return fallback;
   return data.value;
 }
@@ -2907,23 +2912,38 @@ async function getUnifiedHistory(filters = {}) {
 // 12. AJUSTES
 // ==========================================================================
 async function getAllSettings() {
-  const { data, error } = await supabase.from('settings').select('key, value');
+  const { data, error } = await supabase
+    .from('settings')
+    .select('key, value')
+    .eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudieron obtener los ajustes');
   const obj = {};
   (data || []).forEach((r) => (obj[r.key] = r.value));
   return obj;
 }
 
+// settings ya es por sucursal (branch_id + UNIQUE(key, branch_id), ver
+// 20260822050000_settings_branch_isolation.sql). set_setting() (el RPC que
+// hacía este upsert) es "caja negra" -- nunca versionado en este repo, no
+// se reescribe a ciegas. En vez de eso se hace el upsert directo contra la
+// tabla: settings ya tiene RLS abierta a anon desde
+// 20260817020000_settings_rls_policy.sql, así que esto no necesita el RPC
+// en absoluto y sí queda scoped a la sucursal actual.
 async function setSetting(key, value) {
-  const { error } = await supabase.rpc('set_setting', { p_key: key, p_value: String(value) });
+  const { error } = await supabase
+    .from('settings')
+    .upsert(
+      { key, value: String(value), branch_id: getCurrentBranchId() },
+      { onConflict: 'key,branch_id' }
+    );
   must(error, 'No se pudo guardar el ajuste');
   return true;
 }
 
 // Logo del negocio (Ajustes -> SaaS). Sube a Storage (bucket "logos",
 // público) bajo una ruta por sucursal, y guarda la URL pública resultante
-// como un ajuste normal (logo_url), igual que cualquier otra key de
-// settings -- no se agregó ninguna columna nueva a la tabla, es key-value.
+// como un ajuste normal (logo_url) -- settings ya es por sucursal (ver
+// arriba), así que cada sucursal guarda/lee su propio logo.
 async function uploadLogo(filePath, originalFileName) {
   const ext = (path.extname(originalFileName || '') || '.png').toLowerCase();
   const MIME_BY_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
