@@ -1647,13 +1647,16 @@ function mapCashCategoryToCostCategory(categoriaCosto) {
   return MAP[categoriaCosto] || 'variable';
 }
 async function getCorteResumen(fecha) {
-  // fecha = '2026-08-16' en hora de Xalapa
-  // Xalapa 00:00 = UTC 06:00
-  const inicioUTC = `${fecha}T06:00:00.000Z`;
-  const d = new Date(fecha);
-  d.setDate(d.getDate() + 1);
-  const fechaSig = d.toISOString().split('T')[0];
-  const finUTC = `${fechaSig}T05:59:59.999Z`;
+  // fecha = '2026-08-16', día local de la sucursal. Antes esto hardcodeaba
+  // "Xalapa = UTC-6" a mano (${fecha}T06:00:00.000Z) más una vuelta de
+  // getDate()/setDate() para el día siguiente -- dos errores de zona horaria
+  // que casualmente se cancelaban entre sí mientras México no tuviera
+  // horario de verano, pero quedaba frágil y desacoplado de la zona real del
+  // equipo. Se unifica con el mismo helper que ya usa getUnifiedHistory
+  // (localDayStartUtcIso/localDayEndUtcIso): toma la hora local real del
+  // sistema operativo en vez de asumir un offset fijo.
+  const inicioUTC = localDayStartUtcIso(fecha);
+  const finUTC = localDayEndUtcIso(fecha);
 
   // payment_status IN ('pagado_en_caja', 'liquidado') es lo único que
   // realmente está en el cajón. 'dinero_con_repartidor' se excluye a
