@@ -2452,17 +2452,47 @@ function saleHistoryTipo(sale) {
   return 'venta';
 }
 
+// Ventas legadas usan 'completada' (español, valor real que inserta
+// process_sale/las RPC de comandas -- ver 20260820020000_rpc_branch_id_core_sales.sql);
+// se acepta también 'completed'/'completado' por si hay datos de otro origen,
+// pero 'completada' es el único valor que este código realmente escribe hoy.
+const SALE_HISTORY_STATUSES = ['completada', 'completed', 'completado'];
+const WASTE_HISTORY_TIPOS = ['merma', 'consumo_interno'];
+
+function normalizeHistoryDate(str) {
+  if (!str) return null;
+  const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(str);
+  if (dmy) {
+    const [, dd, mm, yyyy] = dmy;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return String(str).slice(0, 10);
+}
+
+// PostgREST/Postgres interpretan un timestamp sin offset ('YYYY-MM-DDTHH:mm:ss')
+// en la zona del SERVIDOR (UTC en Supabase), no en la del escritorio. Mandar la
+// hora local tal cual desfasa la ventana de "Hoy" por el huso horario local y
+// puede dejar fuera ventas del día -- por eso se construye un Date local y se
+// convierte a su instante UTC real con toISOString() antes de filtrar.
+function localDayStartUtcIso(dateStr) {
+  return new Date(`${dateStr}T00:00:00`).toISOString();
+}
+function localDayEndUtcIso(dateStr) {
+  return new Date(`${dateStr}T23:59:59.999`).toISOString();
+}
+
 async function getUnifiedHistory(filters = {}) {
-  const startDate = filters.startDate || '2000-01-01';
-  const endDate = filters.endDate || '2999-12-31';
-  const fromTs = `${startDate}T00:00:00`;
-  const toTs = `${endDate}T23:59:59.999`;
+  const startDate = normalizeHistoryDate(filters.startDate) || '2000-01-01';
+  const endDate = normalizeHistoryDate(filters.endDate) || '2999-12-31';
+  const fromTs = localDayStartUtcIso(startDate);
+  const toTs = localDayEndUtcIso(endDate);
+  const branchId = getCurrentBranchId();
 
   const { data: sales, error: salesErr } = await supabase
     .from('sales')
     .select('*')
-    .eq('status', 'completada')
-    .eq('branch_id', getCurrentBranchId())
+    .in('status', SALE_HISTORY_STATUSES)
+    .eq('branch_id', branchId)
     .gte('created_at', fromTs)
     .lte('created_at', toTs)
     .order('created_at', { ascending: false });
@@ -2482,15 +2512,49 @@ async function getUnifiedHistory(filters = {}) {
     });
   }
 
-  const { data: waste, error: wasteErr } = await supabase
-    .from('waste')
-    .select('*')
-    .eq('branch_id', getCurrentBranchId())
-    .in('tipo', ['consumo_interno', 'merma'])
-    .gte('created_at', fromTs)
-    .lte('created_at', toTs)
-    .order('created_at', { ascending: false });
-  must(wasteErr, 'No se pudo obtener merma/consumo interno del historial');
+  // Si el usuario ya filtra por un tipo específico, no traigas de más: si es
+  // un tipo de merma/waste, acota la query a ese; si es un tipo de venta
+  // (venta/para_llevar/domicilio/beneficio_empleado/credito_nomina) ninguna
+  // fila de waste puede calzar, así que ni se consulta.
+  let wasteTipoFilter = WASTE_HISTORY_TIPOS;
+  if (filters.tipo && filters.tipo !== 'todos') {
+    wasteTipoFilter = WASTE_HISTORY_TIPOS.includes(filters.tipo) ? [filters.tipo] : null;
+  }
+
+  let waste = [];
+  if (wasteTipoFilter) {
+    try {
+      // waste.branch_id ya existe (columna agregada 2026-08-21), pero hay
+      // filas viejas con branch_id NULL -- para esas se cae a inventory_id
+      // para inferir la sucursal. Si no toca ninguna fila no truena el
+      // historial completo, solo se registra y se sigue con waste vacío.
+      const { data: inv, error: invErr } = await supabase
+        .from('inventory')
+        .select('id')
+        .eq('branch_id', branchId);
+      if (invErr) throw invErr;
+      const invIds = (inv || []).map((i) => i.id);
+
+      let query = supabase
+        .from('waste')
+        .select('*')
+        .in('tipo', wasteTipoFilter)
+        .gte('created_at', fromTs)
+        .lte('created_at', toTs)
+        .order('created_at', { ascending: false });
+
+      query = invIds.length > 0
+        ? query.or(`branch_id.eq.${branchId},and(branch_id.is.null,inventory_id.in.(${invIds.join(',')}))`)
+        : query.eq('branch_id', branchId);
+
+      const { data: wasteData, error: wasteErr } = await query;
+      if (wasteErr) throw wasteErr;
+      waste = wasteData || [];
+    } catch (e) {
+      console.warn('No se pudo obtener merma/consumo interno para el historial:', e.message || e);
+      waste = [];
+    }
+  }
 
   const rows = [];
 
@@ -2516,9 +2580,6 @@ async function getUnifiedHistory(filters = {}) {
       repartidor: s.is_delivery ? s.driver_name : null,
       direccion: s.is_delivery ? s.delivery_address : null,
       telefono: s.is_delivery ? s.customer_phone : null,
-      // Solo informativo aquí (el historial lista todo lo 'completada' sin
-      // importar si ya se liquidó); getCorteResumen es quien de verdad
-      // filtra por esto para el cajón.
       paymentStatus: s.payment_status || null
     });
 
@@ -2568,8 +2629,6 @@ async function getUnifiedHistory(filters = {}) {
 
   rows.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
 
-  // KPIs sobre el mismo rango (y empleado/método si están activos), sin
-  // aplicar el filtro de tipo -- son justamente el desglose POR tipo.
   const kpiScope = rows.filter((r) => {
     if (filters.employeeName && r.empleadoNombre !== filters.employeeName) return false;
     if (filters.paymentMethod && r.metodo !== filters.paymentMethod) return false;
@@ -2585,9 +2644,6 @@ async function getUnifiedHistory(filters = {}) {
     mermaTotal: sumTipo('merma')
   };
 
-  // Filtros finales sobre las filas a mostrar. "credito_nomina" no es un
-  // tipo propio (una venta domicilio/para llevar/etc. puede haberse pagado
-  // así): se filtra por método, no por tipo.
   const filtered = rows.filter((r) => {
     if (filters.tipo === 'credito_nomina') {
       if (r.metodo !== 'credito_nomina') return false;
@@ -2601,8 +2657,7 @@ async function getUnifiedHistory(filters = {}) {
 
   return { rows: filtered, kpis };
 }
-
-// ==========================================================================
+//===================================================
 // 12. AJUSTES
 // ==========================================================================
 async function getAllSettings() {
