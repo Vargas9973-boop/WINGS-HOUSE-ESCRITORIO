@@ -283,10 +283,29 @@ const CATEGORY_BONELESS = 'Boneless';
 // producto. Idempotente: se puede llamar en cada arranque sin efecto una
 // vez que ya no quedan filas legacy.
 async function migrateAlitasBonelessCategories() {
-  const { data, error } = await supabase.rpc('migrate_alitas_boneless_categories', { p_branch_id: getCurrentBranchId() });
-  must(error, 'No se pudo migrar categorías Alitas/Boneless');
-  console.log(`Migración categorías Alitas/Boneless: ${data.toBoneless} producto(s) -> Boneless, ${data.toAlitas} producto(s) -> Alitas.`);
-  return data;
+  try {
+    const branchId = getCurrentBranchId();
+    if (!branchId) {
+      console.warn('[MIGRATION] No hay branchId, se omite migración alitas/boneless');
+      return;
+    }
+    const { data, error } = await supabase.rpc('migrate_alitas_boneless_categories', { p_branch_id: branchId });
+    if (error) {
+      console.warn('[MIGRATION] migrate_alitas_boneless_categories skip:', error.message);
+      return;
+    }
+    // La función puede regresar null/void, no intentar leer propiedades
+    if (!data) {
+      console.log('[MIGRATION] Alitas/Boneless OK para branch', branchId);
+      return;
+    }
+    // Si algún día regresa algo, usar optional chaining
+    console.log('[MIGRATION] resultado:', data?.toBoneless ?? data);
+  } catch (e) {
+    console.warn('[MIGRATION] Alitas/Boneless error capturado:', e.message);
+    // No lanzar, para no romper el init
+    return;
+  }
 }
 
 function normalizeStock(value) {
