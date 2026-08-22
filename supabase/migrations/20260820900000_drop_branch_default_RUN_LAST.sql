@@ -1,0 +1,50 @@
+-- Opción A -- Tarea 2 / Migración 0010. NO CORRER TODAVÍA.
+--
+-- El DEFAULT que 20260815070000_branch_and_ticket_schema.sql fijó en
+-- sales/users/inventory/costs/attendance/promotions/folio_counters (y el que
+-- 20260820000000 acaba de fijar en employees/drivers/waste) apuntando
+-- siempre a la misma sucursal es el bug raíz de todo este trabajo: cualquier
+-- INSERT que no mande branch_id explícito cae ahí en silencio. Quitarlo es
+-- lo correcto, pero solo DESPUÉS de que every RPC que inserta en estas
+-- tablas mande branch_id explícito -- si se corre esta migración antes,
+-- cualquier insert que todavía dependa del DEFAULT (los RPC "caja negra"
+-- listados en 20260820060000_tmp_introspect_pending_rpcs.sql, mientras no
+-- se hayan parchado) empieza a grabar branch_id = NULL en vez de fallar
+-- ruidosamente -- una venta fantasma que desaparece de todas las pantallas
+-- filtradas por sucursal, el peor tipo de bug para diagnosticar.
+--
+-- Checklist antes de correr esto (márcalo tú, no yo):
+--   [ ] 0009-parte-2 desplegada -- de los RPC que faltaban, ya se
+--       encontraron y arreglaron en el repo: comanda_open_table,
+--       comanda_add_item, close_table, comanda_open_takeout,
+--       comanda_assign_driver, liquidate_driver_sales (ver
+--       20260820020000_rpc_branch_id_core_sales.sql). Siguen pendientes de
+--       introspección real: cancel_table, comanda_update_kitchen,
+--       register_attendance, create_employee, comanda_board,
+--       get_employee_daily_consumption, get_payroll_week_credit,
+--       set_payroll_bonus, wh_next_folio -- confirma que TODOS estos ya
+--       reciben y usan p_branch_id antes de continuar.
+--   [ ] db.js y wing-house-web redeployados con las llamadas actualizadas
+--       (Tarea 3) -- nadie sigue llamando estos RPC sin p_branch_id.
+--   [ ] Corriste el script de la Tarea 4 (validación IDOR) contra la base
+--       real y las 3 pruebas fallan como se espera (SELECT bloqueado,
+--       UPDATE cross-branch lanza excepción).
+--
+-- Cuando los 3 estén marcados, descomenta y corre:
+--
+-- ALTER TABLE public.sales ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.users ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.inventory ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.costs ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.attendance ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.promotions ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.folio_counters ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.employees ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.drivers ALTER COLUMN branch_id DROP DEFAULT;
+-- ALTER TABLE public.waste ALTER COLUMN branch_id DROP DEFAULT;
+--
+-- Recomendado (por separado, después de confirmar que ya no hay ninguna
+-- fila con branch_id NULL en ninguna de estas tablas):
+-- ALTER TABLE public.sales ALTER COLUMN branch_id SET NOT NULL;
+-- ... (y así para el resto) -- esto sí bloquea en seco cualquier insert que
+-- se le vuelva a olvidar branch_id, en vez de dejarlo pasar como NULL.

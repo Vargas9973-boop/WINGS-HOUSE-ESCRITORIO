@@ -22,15 +22,41 @@ function must(error, msg) {
 }
 
 // ==========================================================================
-// SUCURSAL — Marina Nacional (id real en la tabla branches). db.js corre en
-// el proceso principal de Electron (sin localStorage/DOM); una sola
-// instalación sirve una sola sucursal, así que basta una constante. El día
-// que haya instalaciones por sucursal, getCurrentBranchId() es el único
-// punto a cambiar (ajuste vía settings, por ejemplo).
-// ==========================================================================
-const DEFAULT_BRANCH_ID = 1; // Marina Nacional
+// SUCURSAL — cada instalación de escritorio sirve UNA sucursal física (la
+// terminal vive en un local), así que el branch pertenece a la instalación,
+// no a la sesión de quién inició sesión (a diferencia de la web, donde
+// cualquier empleado puede entrar desde cualquier lado -- ver
+// wing-house-web/src/components/Login.jsx). main.js resuelve el valor real
+// (archivo de config en app.getPath('userData'), con bootstrap automático
+// si solo existe una sucursal en la base) y lo inyecta aquí con
+// setCurrentBranchId() antes de llamar a db.init(). Si nadie lo configura,
+// getCurrentBranchId() lanza en vez de caer en silencio a la sucursal 1 --
+// esa era exactamente la regla que no se podía romper.
+let _currentBranchId = null;
+
+function setCurrentBranchId(id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`branch_id inválido: ${id}`);
+  }
+  _currentBranchId = n;
+}
+
 function getCurrentBranchId() {
-  return DEFAULT_BRANCH_ID;
+  if (_currentBranchId == null) {
+    throw new Error('La sucursal de esta instalación todavía no está configurada (setCurrentBranchId).');
+  }
+  return _currentBranchId;
+}
+
+// Usada solo por main.js durante el arranque, ANTES de que haya un
+// currentBranchId, para poder resolverlo (bootstrap automático si solo hay
+// una sucursal en la base, o listado para que el admin elija si hay más de
+// una). No requiere branch_id porque branches es la tabla raíz.
+async function getAllBranches() {
+  const { data, error } = await supabase.from('branches').select('*').order('id');
+  must(error, 'No se pudieron obtener las sucursales');
+  return data || [];
 }
 
 // ==========================================================================
@@ -130,6 +156,7 @@ async function login(username, password) {
     .from('users')
     .select('*')
     .eq('username', cleanUsername)
+    .eq('branch_id', getCurrentBranchId())
     .eq('active', true)
     .maybeSingle();
 
@@ -171,7 +198,7 @@ async function changePassword(userId, newPassword) {
   // La columna legacy 'password' es NOT NULL en Supabase; se mantiene en
   // sincronía con el hash (no se guarda en texto plano) para no violar la
   // restricción y para que no quede una contraseña anterior obsoleta ahí.
-  const { error } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', userId);
+  const { error } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', userId).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo cambiar la contraseña');
   return true;
 }
@@ -220,21 +247,21 @@ async function updateUser(id, data) {
     role: data.role || 'cajero',
     active: data.active !== false
   };
-  const { error } = await supabase.from('users').update(patch).eq('id', id);
+  const { error } = await supabase.from('users').update(patch).eq('id', id).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo actualizar la cuenta');
   if (data.password) {
     const { salt, hash } = makeCredentials(data.password);
-    const { error: pwErr } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', id);
+    const { error: pwErr } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', id).eq('branch_id', getCurrentBranchId());
     must(pwErr, 'No se pudo actualizar la contraseña');
   }
   const { data: row, error: selErr } = await supabase
-    .from('users').select('id, username, display_name:name, role, active').eq('id', id).single();
+    .from('users').select('id, username, display_name:name, role, active').eq('id', id).eq('branch_id', getCurrentBranchId()).single();
   must(selErr);
   return row;
 }
 
 async function removeUser(id) {
-  const { error } = await supabase.from('users').update({ active: false }).eq('id', id);
+  const { error } = await supabase.from('users').update({ active: false }).eq('id', id).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo desactivar la cuenta');
   return { deactivated: true };
 }
@@ -256,36 +283,10 @@ const CATEGORY_BONELESS = 'Boneless';
 // producto. Idempotente: se puede llamar en cada arranque sin efecto una
 // vez que ya no quedan filas legacy.
 async function migrateAlitasBonelessCategories() {
-  const legacyFilter = [
-    'category.eq."Alitas y Boneless"',
-    'category.eq.alitas',
-    'category.eq.boneless'
-  ].join(',');
-
-  const { data: rows, error } = await supabase
-    .from('products')
-    .select('id, name, category')
-    .or(legacyFilter);
-  must(error, 'No se pudo leer productos para migrar categorías Alitas/Boneless');
-
-  if (!rows || rows.length === 0) return { toAlitas: 0, toBoneless: 0 };
-
-  let toAlitas = 0;
-  let toBoneless = 0;
-  for (const row of rows) {
-    const target = /boneless/i.test(row.name) ? CATEGORY_BONELESS : CATEGORY_ALITAS;
-    if (row.category === target) continue;
-    const { error: updErr } = await supabase.from('products').update({ category: target }).eq('id', row.id);
-    must(updErr, `No se pudo migrar la categoría del producto id=${row.id}`);
-    if (target === CATEGORY_BONELESS) {
-      toBoneless += 1;
-    } else {
-      toAlitas += 1;
-      console.log(`Migración categorías: producto id=${row.id} "${row.name}" -> Alitas (nombre ambiguo, sin "boneless").`);
-    }
-  }
-  console.log(`Migración categorías Alitas/Boneless: ${toBoneless} producto(s) -> Boneless, ${toAlitas} producto(s) -> Alitas.`);
-  return { toAlitas, toBoneless };
+  const { data, error } = await supabase.rpc('migrate_alitas_boneless_categories', { p_branch_id: getCurrentBranchId() });
+  must(error, 'No se pudo migrar categorías Alitas/Boneless');
+  console.log(`Migración categorías Alitas/Boneless: ${data.toBoneless} producto(s) -> Boneless, ${data.toAlitas} producto(s) -> Alitas.`);
+  return data;
 }
 
 function normalizeStock(value) {
@@ -295,67 +296,56 @@ function normalizeStock(value) {
 }
 
 async function getAllProducts() {
-  const { data, error } = await supabase
-    .from('products').select('*')
-    .order('category', { ascending: true })
-    .order('sort_order', { ascending: true })
-    .order('name', { ascending: true });
+  const { data, error } = await supabase.rpc('get_products_by_branch', { p_branch_id: getCurrentBranchId() });
   must(error, 'No se pudieron obtener los productos');
   return data;
 }
 
 async function createProduct(data) {
-  const { data: row, error } = await supabase.from('products').insert([{
-    name: data.name,
-    category: data.category,
-    price: Number(data.price) || 0,
-    employee_price: data.employee_price ? Number(data.employee_price) : null,
-    active: data.active !== false,
-    sort_order: Number(data.sort_order) || 0,
-    stock: normalizeStock(data.stock)
-  }]).select().single();
+  const { data: row, error } = await supabase.rpc('create_product', {
+    p_branch_id: getCurrentBranchId(),
+    p_name: data.name,
+    p_category: data.category,
+    p_price: Number(data.price) || 0,
+    p_employee_price: data.employee_price ? Number(data.employee_price) : null,
+    p_active: data.active !== false,
+    p_sort_order: Number(data.sort_order) || 0,
+    p_stock: normalizeStock(data.stock)
+  });
   must(error, 'No se pudo crear el producto');
   return row;
 }
 
 async function updateProduct(id, data) {
-  const { error } = await supabase.from('products').update({
-    name: data.name,
-    category: data.category,
-    price: Number(data.price) || 0,
-    employee_price: data.employee_price ? Number(data.employee_price) : null,
-    active: data.active !== false,
-    sort_order: Number(data.sort_order) || 0,
-    stock: normalizeStock(data.stock)
-  }).eq('id', id);
+  const { data: row, error } = await supabase.rpc('update_product', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_name: data.name,
+    p_category: data.category,
+    p_price: Number(data.price) || 0,
+    p_employee_price: data.employee_price ? Number(data.employee_price) : null,
+    p_active: data.active !== false,
+    p_sort_order: Number(data.sort_order) || 0,
+    p_stock: normalizeStock(data.stock)
+  });
   must(error, 'No se pudo actualizar el producto');
-  const { data: row, error: selErr } = await supabase.from('products').select('*').eq('id', id).single();
-  must(selErr);
   return row;
 }
 
 async function adjustProductStock(id, delta) {
-  const { data: product, error } = await supabase.from('products').select('*').eq('id', id).single();
-  must(error, 'Producto no encontrado');
-  if (product.stock === null) return product;
-  const newStock = Math.max(0, Number(product.stock) + Number(delta));
-  const { data: row, error: updErr } = await supabase.from('products').update({ stock: newStock }).eq('id', id).select().single();
-  must(updErr, 'No se pudo ajustar la existencia');
+  const { data: row, error } = await supabase.rpc('adjust_product_stock', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_delta: Number(delta)
+  });
+  must(error, 'No se pudo ajustar la existencia');
   return row;
 }
 
 async function removeProduct(id) {
-  const { count, error } = await supabase
-    .from('sale_items').select('id', { count: 'exact', head: true }).eq('ref_id', id).eq('item_type', 'product');
-  must(error);
-  if (count && count > 0) {
-    const { error: deErr } = await supabase.from('products').update({ active: false }).eq('id', id);
-    must(deErr, 'No se pudo desactivar el producto');
-    return { deleted: false, deactivated: true };
-  }
-  const { error: delErr } = await supabase.from('products').delete().eq('id', id);
-  must(delErr, 'No se pudo eliminar el producto');
-  return { deleted: true, deactivated: false };
+  const { data, error } = await supabase.rpc('remove_product', { p_branch_id: getCurrentBranchId(), p_id: id });
+  must(error, 'No se pudo eliminar el producto');
+  return data;
 }
 
 // ==========================================================================
@@ -372,44 +362,36 @@ async function getAllPromotions() {
 }
 
 async function createPromotion(data) {
-  const { data: row, error } = await supabase.from('promotions').insert([{
-    name: data.name,
-    description: data.description || '',
-    price: Number(data.price) || 0,
-    active: data.active !== false,
-    applicable_category: data.applicable_category || null,
-    branch_id: getCurrentBranchId()
-  }]).select().single();
+  const { data: row, error } = await supabase.rpc('create_promotion', {
+    p_branch_id: getCurrentBranchId(),
+    p_name: data.name,
+    p_description: data.description || '',
+    p_price: Number(data.price) || 0,
+    p_active: data.active !== false,
+    p_applicable_category: data.applicable_category || null
+  });
   must(error, 'No se pudo crear la promoción');
   return row;
 }
 
 async function updatePromotion(id, data) {
-  const { error } = await supabase.from('promotions').update({
-    name: data.name,
-    description: data.description || '',
-    price: Number(data.price) || 0,
-    active: data.active !== false,
-    applicable_category: data.applicable_category || null
-  }).eq('id', id);
+  const { data: row, error } = await supabase.rpc('update_promotion', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_name: data.name,
+    p_description: data.description || '',
+    p_price: Number(data.price) || 0,
+    p_active: data.active !== false,
+    p_applicable_category: data.applicable_category || null
+  });
   must(error, 'No se pudo actualizar la promoción');
-  const { data: row, error: selErr } = await supabase.from('promotions').select('*').eq('id', id).single();
-  must(selErr);
   return row;
 }
 
 async function removePromotion(id) {
-  const { count, error } = await supabase
-    .from('sale_items').select('id', { count: 'exact', head: true }).eq('ref_id', id).eq('item_type', 'promo');
-  must(error);
-  if (count && count > 0) {
-    const { error: deErr } = await supabase.from('promotions').update({ active: false }).eq('id', id);
-    must(deErr, 'No se pudo desactivar la promoción');
-    return { deleted: false, deactivated: true };
-  }
-  const { error: delErr } = await supabase.from('promotions').delete().eq('id', id);
-  must(delErr, 'No se pudo eliminar la promoción');
-  return { deleted: true, deactivated: false };
+  const { data, error } = await supabase.rpc('remove_promotion', { p_branch_id: getCurrentBranchId(), p_id: id });
+  must(error, 'No se pudo eliminar la promoción');
+  return data;
 }
 
 // ==========================================================================
@@ -431,6 +413,7 @@ async function createSale(payload, openedBy, cashierId) {
   }
 
   const { data, error } = await supabase.rpc('process_sale', {
+    p_branch_id: getCurrentBranchId(),
     p_client_type: payload.clientType || 'public',
     p_items: mapCartItems(payload.items),
     p_payment_method: payload.paymentMethod || 'efectivo',
@@ -462,21 +445,25 @@ async function createSale(payload, openedBy, cashierId) {
     .filter(({ item }) => Array.isArray(item.modifierIds) && item.modifierIds.length > 0);
 
   if (itemsWithModifiers.length > 0) {
-    const { data: createdItems, error: createdItemsErr } = await supabase
-      .from('sale_items').select('id').eq('sale_id', data.id).order('id');
+    const { data: createdItems, error: createdItemsErr } = await supabase.rpc('get_sale_items_with_modifiers', {
+      p_branch_id: getCurrentBranchId(),
+      p_sale_ids: [data.id]
+    });
     if (createdItemsErr) {
       console.error('No se pudieron ligar las salsas elegidas:', createdItemsErr.message);
     } else {
-      const modifierRows = [];
-      itemsWithModifiers.forEach(({ item, index }) => {
+      // set_sale_item_notes_and_modifiers (RPC) reemplaza el insert directo
+      // a sale_item_modifiers (bloqueado por RLS desde 20260820010000);
+      // valida que cada renglón sea de esta sucursal antes de ligar la salsa.
+      for (const { item, index } of itemsWithModifiers) {
         const saleItem = createdItems[index];
-        if (!saleItem) return;
-        item.modifierIds.forEach((modifierId) => {
-          modifierRows.push({ sale_item_id: saleItem.id, modifier_id: modifierId });
+        if (!saleItem) continue;
+        const { error: modErr } = await supabase.rpc('set_sale_item_notes_and_modifiers', {
+          p_branch_id: getCurrentBranchId(),
+          p_sale_item_id: saleItem.id,
+          p_notes: null,
+          p_modifier_ids: item.modifierIds
         });
-      });
-      if (modifierRows.length > 0) {
-        const { error: modErr } = await supabase.from('sale_item_modifiers').insert(modifierRows);
         if (modErr) console.error('No se pudieron guardar las salsas elegidas:', modErr.message);
       }
     }
@@ -487,10 +474,11 @@ async function createSale(payload, openedBy, cashierId) {
   // función de cobro. Si esto falla no se revierte la venta ya cerrada,
   // solo queda sin "Atendió" en el ticket.
   if (cashierId != null) {
-    const { error: updErr } = await supabase
-      .from('sales')
-      .update({ cashier_user_id: cashierId, branch_id: getCurrentBranchId() })
-      .eq('id', data.id);
+    const { error: updErr } = await supabase.rpc('set_sale_cashier', {
+      p_branch_id: getCurrentBranchId(),
+      p_sale_id: data.id,
+      p_cashier_user_id: cashierId
+    });
     if (updErr) console.error('No se pudo asociar el cajero a la venta:', updErr.message);
   }
 
@@ -527,11 +515,11 @@ async function createSale(payload, openedBy, cashierId) {
   };
 }
 async function getSaleById(id) {
-  const { data: sale, error } = await supabase.from('sales').select('*').eq('id', id).maybeSingle();
+  const { data: sale, error } = await supabase.from('sales').select('*').eq('id', id).eq('branch_id', getCurrentBranchId()).maybeSingle();
   must(error, 'No se pudo obtener la venta');
   if (!sale) return null;
-  const { data: items, error: itErr } = await supabase.from('sale_items').select(SALE_ITEMS_WITH_MODIFIERS_SELECT).eq('sale_id', id).order('id');
-  must(itErr);
+  const rawItems = await getSaleItemsWithModifiers(id);
+  const items = await reattachModifierNames(rawItems);
 
   let employeeBenefitUsed = 0;
   let employeeCashExtra = 0;
@@ -635,6 +623,16 @@ async function getEmployeeDailyConsumption(employeeId) {
     return 0;
   }
 
+  // Pendiente: get_employee_daily_consumption todavía no recibe
+  // p_branch_id (RPC "caja negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql).
+  // Mientras tanto, este select cierra la parte del hueco que sí se puede
+  // cerrar sin tocar ese RPC: confirmar aquí que el empleado es de esta
+  // sucursal antes de pedirle su consumo.
+  const { data: emp, error: empErr } = await supabase
+    .from('employees').select('id').eq('id', Number(employeeId)).eq('branch_id', getCurrentBranchId()).maybeSingle();
+  must(empErr, 'No se pudo verificar el empleado');
+  if (!emp) throw new Error('El empleado no pertenece a esta sucursal.');
+
   // IMPORTANTE: se usa el RPC (SECURITY DEFINER) y NO un select directo a
   // la tabla employee_consumption. La tabla tiene RLS que bloquea lecturas
   // directas del cliente de Supabase; el RPC corre con privilegios elevados
@@ -664,9 +662,11 @@ async function getEmployeeDailyConsumption(employeeId) {
 async function getProductsSummary(dateFrom, dateTo) {
   const fromTs = `${dateFrom}T00:00:00`;
   const toTs = `${dateTo}T23:59:59.999`;
-  const { data: items, error } = await supabase
-    .from('sale_items').select('name, quantity, subtotal, sales!inner(status, created_at)')
-    .eq('sales.status', 'completada').gte('sales.created_at', fromTs).lte('sales.created_at', toTs);
+  const { data: items, error } = await supabase.rpc('get_sale_items_summary', {
+    p_branch_id: getCurrentBranchId(),
+    p_from: fromTs,
+    p_to: toTs
+  });
   must(error, 'No se pudo obtener el resumen de productos');
   const byProduct = {};
   (items || []).forEach((it) => {
@@ -678,7 +678,7 @@ async function getProductsSummary(dateFrom, dateTo) {
 }
 
 async function markSalePrinted(id) {
-  const { error } = await supabase.from('sales').update({ printed: true }).eq('id', id);
+  const { error } = await supabase.rpc('mark_sale_printed', { p_branch_id: getCurrentBranchId(), p_sale_id: id });
   must(error, 'No se pudo marcar el ticket como impreso');
   return true;
 }
@@ -702,7 +702,7 @@ function subscribeToNewSales(onInsert, onStatusChange) {
     .channel('sales-inserts')
     .on(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'sales' },
+      { event: 'INSERT', schema: 'public', table: 'sales', filter: `branch_id=eq.${getCurrentBranchId()}` },
       (payload) => onInsert(payload.new)
     )
     .subscribe((status, err) => {
@@ -751,25 +751,69 @@ async function getTables() {
 }
 
 async function openTable(tableNumber, openedBy) {
-  const { data, error } = await supabase.rpc('comanda_open_table', { p_table_number: tableNumber, p_opened_by: openedBy || null });
+  const { data, error } = await supabase.rpc('comanda_open_table', {
+    p_branch_id: getCurrentBranchId(),
+    p_table_number: tableNumber,
+    p_opened_by: openedBy || null
+  });
   must(error, 'No se pudo abrir la mesa');
   return { id: data };
 }
 
 // Trae cada renglón de sale_items junto con sus modificadores (salsas)
-// elegidos, si los tiene -- sale_item_modifiers(modifier_id) + el nombre de
-// la salsa vía su FK a modifiers. Usado tanto por la comanda de mesa como
-// por la de para llevar para poder pintar "• {salsa}" bajo el producto.
-const SALE_ITEMS_WITH_MODIFIERS_SELECT = '*, sale_item_modifiers(id, modifier_id, modifiers(id, name))';
+// elegidos, si los tiene -- sale_item_modifiers(modifier_id). Usado tanto
+// por la comanda de mesa como por la de para llevar para poder pintar
+// "• {salsa}" bajo el producto.
+//
+// OJO: ya NO se embebe modifiers(id, name) aquí -- desde que products/
+// modifiers quedaron cerrados por completo para anon (20260820080000), un
+// join embebido de PostgREST hacia una tabla con RLS que deniega SELECT
+// devuelve null en vez de tronar, así que el nombre de la salsa se perdía
+// en silencio. reattachModifierNames() (abajo) reconstruye la MISMA forma
+// que tenían estos objetos antes (sale_item_modifiers[].modifiers.name),
+// resolviendo el nombre vía getModifiers() (ahora RPC), para no tener que
+// tocar ticket-renderer.js/history-renderer.js/kds-renderer.js que ya
+// esperan esa forma.
+// sale_items/sale_item_modifiers ya no admiten SELECT directo para anon
+// (20260820025000 -- misma fuga cerrada que products/modifiers). Reemplaza
+// el patrón `.from('sale_items').select('*, sale_item_modifiers(id,
+// modifier_id))').eq/in('sale_id', ...)` por la RPC equivalente, que
+// devuelve exactamente la misma forma (json con todas las columnas de
+// sale_items + sale_item_modifiers como array anidado).
+async function getSaleItemsWithModifiers(saleIds) {
+  const ids = Array.isArray(saleIds) ? saleIds : [saleIds];
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase.rpc('get_sale_items_with_modifiers', {
+    p_branch_id: getCurrentBranchId(),
+    p_sale_ids: ids
+  });
+  must(error, 'No se pudieron obtener los artículos de la venta');
+  return data || [];
+}
+
+async function getModifierNameMap() {
+  const mods = await getModifiers();
+  return new Map(mods.map((m) => [m.id, m.name]));
+}
+
+async function reattachModifierNames(items) {
+  const nameMap = await getModifierNameMap();
+  return (items || []).map((it) => ({
+    ...it,
+    sale_item_modifiers: (it.sale_item_modifiers || []).map((sim) => ({
+      ...sim,
+      modifiers: nameMap.has(sim.modifier_id) ? { id: sim.modifier_id, name: nameMap.get(sim.modifier_id) } : null
+    }))
+  }));
+}
 
 async function getOpenSaleByTable(tableNumber) {
   const { data: sale, error } = await supabase.from('sales').select('*')
     .eq('status', 'abierta').eq('table_number', tableNumber).eq('branch_id', getCurrentBranchId()).maybeSingle();
   must(error, 'No se pudo obtener la mesa');
   if (!sale) return null;
-  const { data: items, error: itErr } = await supabase.from('sale_items').select(SALE_ITEMS_WITH_MODIFIERS_SELECT).eq('sale_id', sale.id).order('id');
-  must(itErr);
-  return { ...sale, items };
+  const items = await getSaleItemsWithModifiers(sale.id);
+  return { ...sale, items: await reattachModifierNames(items) };
 }
 
 // Pedidos "para llevar": misma comanda que una mesa (sale_items, cobro,
@@ -796,7 +840,10 @@ async function getOpenTakeoutOrders() {
 }
 
 async function openTakeoutOrder(openedBy) {
-  const { data, error } = await supabase.rpc('comanda_open_takeout', { p_opened_by: openedBy || null });
+  const { data, error } = await supabase.rpc('comanda_open_takeout', {
+    p_branch_id: getCurrentBranchId(),
+    p_opened_by: openedBy || null
+  });
   must(error, 'No se pudo abrir el pedido para llevar');
   return { id: data };
 }
@@ -819,12 +866,11 @@ async function comandaSetDeliveryStatus(saleId, status) {
   if (status !== 'en_camino' && status !== 'entregado') {
     throw new Error(`Estado de entrega inválido: ${status}`);
   }
-  const update = { delivery_status: status };
-  if (status === 'entregado') {
-    update.status = 'completada';
-    update.payment_status = 'dinero_con_repartidor';
-  }
-  const { error } = await supabase.from('sales').update(update).eq('id', saleId);
+  const { error } = await supabase.rpc('comanda_update_delivery_status', {
+    p_branch_id: getCurrentBranchId(),
+    p_sale_id: saleId,
+    p_status: status
+  });
   must(error, 'No se pudo actualizar el estado de entrega');
   return true;
 }
@@ -837,6 +883,7 @@ async function comandaSetDeliveryStatus(saleId, status) {
 // repartidor sale con la comida, todavía no ha cobrado nada.
 async function comandaAssignDriver(saleId, driverId, deliveryFee) {
   const { data, error } = await supabase.rpc('comanda_assign_driver', {
+    p_branch_id: getCurrentBranchId(),
     p_sale_id: saleId,
     p_driver_id: driverId,
     p_delivery_fee: Number(deliveryFee) || 0
@@ -851,6 +898,7 @@ async function getDrivers() {
   const { data, error } = await supabase
     .from('drivers')
     .select('*')
+    .eq('branch_id', getCurrentBranchId())
     .eq('active', true)
     .order('name');
   must(error, 'No se pudieron obtener los repartidores');
@@ -860,11 +908,11 @@ async function getDrivers() {
 async function createDriver(name, phone) {
   const cleanName = String(name || '').trim();
   if (!cleanName) throw new Error('El nombre del repartidor es obligatorio.');
-  const { data, error } = await supabase
-    .from('drivers')
-    .insert([{ name: cleanName, phone: phone || null }])
-    .select()
-    .single();
+  const { data, error } = await supabase.rpc('create_driver', {
+    p_branch_id: getCurrentBranchId(),
+    p_name: cleanName,
+    p_phone: phone || null
+  });
   must(error, 'No se pudo crear el repartidor');
   return data;
 }
@@ -877,6 +925,7 @@ async function getPendingDriverMoney() {
   const { data, error } = await supabase
     .from('sales')
     .select('id, total, delivery_fee, driver_id, drivers(name)')
+    .eq('branch_id', getCurrentBranchId())
     .eq('payment_status', 'dinero_con_repartidor')
     .not('driver_id', 'is', null);
   must(error, 'No se pudo obtener el dinero pendiente de repartidores');
@@ -905,7 +954,10 @@ async function getPendingDriverMoney() {
 // queda con el envío -- por eso el total liquidado es total - delivery_fee,
 // no el total completo.
 async function liquidateDriverSales(driverId) {
-  const { data, error } = await supabase.rpc('liquidate_driver_sales', { p_driver_id: driverId });
+  const { data, error } = await supabase.rpc('liquidate_driver_sales', {
+    p_branch_id: getCurrentBranchId(),
+    p_driver_id: driverId
+  });
   must(error, 'No se pudo liquidar al repartidor');
   return data;
 }
@@ -914,6 +966,7 @@ async function getSalesByPaymentStatus(status) {
   const { data, error } = await supabase
     .from('sales')
     .select('*')
+    .eq('branch_id', getCurrentBranchId())
     .eq('payment_status', status)
     .order('created_at', { ascending: false });
   must(error, 'No se pudieron obtener las ventas por estado de pago');
@@ -923,18 +976,21 @@ async function getSalesByPaymentStatus(status) {
 async function updateSalePaymentStatus(saleId, status) {
   const VALID = ['pendiente', 'pagado_en_caja', 'dinero_con_repartidor', 'liquidado'];
   if (!VALID.includes(status)) throw new Error(`Estado de pago inválido: ${status}`);
-  const { error } = await supabase.from('sales').update({ payment_status: status }).eq('id', saleId);
+  const { error } = await supabase.rpc('update_sale_payment_status', {
+    p_branch_id: getCurrentBranchId(),
+    p_sale_id: saleId,
+    p_status: status
+  });
   must(error, 'No se pudo actualizar el estado de pago');
   return true;
 }
 
 async function getOpenSaleById(saleId) {
-  const { data: sale, error } = await supabase.from('sales').select('*').eq('id', saleId).maybeSingle();
+  const { data: sale, error } = await supabase.from('sales').select('*').eq('id', saleId).eq('branch_id', getCurrentBranchId()).maybeSingle();
   must(error, 'No se pudo obtener el pedido');
   if (!sale || sale.status !== 'abierta') return null;
-  const { data: items, error: itErr } = await supabase.from('sale_items').select(SALE_ITEMS_WITH_MODIFIERS_SELECT).eq('sale_id', sale.id).order('id');
-  must(itErr);
-  return { ...sale, items };
+  const items = await getSaleItemsWithModifiers(sale.id);
+  return { ...sale, items: await reattachModifierNames(items) };
 }
 
 async function comandaAddItem(saleId, item) {
@@ -947,11 +1003,13 @@ async function comandaAddItem(saleId, item) {
       saleId,
       item.id ?? item.productId ?? item.ref_id,
       item.quantity,
-      item.modifierIds
+      item.modifierIds,
+      item.notes || null
     );
   }
 
   const { error } = await supabase.rpc('comanda_add_item', {
+    p_branch_id: getCurrentBranchId(),
     p_sale_id: saleId,
     p_ref_id: item.id ?? item.ref_id ?? null,
     p_item_type: item.itemType || item.item_type || 'product',
@@ -960,7 +1018,7 @@ async function comandaAddItem(saleId, item) {
     p_quantity: Number(item.quantity) || 1
   });
   must(error, 'No se pudo agregar el artículo');
-  const { data: sale, error: selErr } = await supabase.from('sales').select('*').eq('id', saleId).single();
+  const { data: sale, error: selErr } = await supabase.from('sales').select('*').eq('id', saleId).eq('branch_id', getCurrentBranchId()).single();
   must(selErr);
   return sale;
 }
@@ -973,65 +1031,87 @@ async function comandaAddItem(saleId, item) {
 // cada salsa (modifiers.qty_needed * cantidad) lo hace
 // trg_sale_item_modifiers_after_insert automáticamente al insertar en
 // sale_item_modifiers -- aquí no se toca inventory directamente.
-async function comandaAddItemWithModifiers(saleId, productId, qty, modifierIds) {
-  const { data: product, error: prodErr } = await supabase.from('products').select('*').eq('id', productId).single();
-  must(prodErr, 'Producto no encontrado');
+async function comandaAddItemWithModifiers(saleId, productId, qty, modifierIds, notes) {
+  // products ya no admite SELECT directo para anon (20260820000012) --
+  // se resuelve vía la misma RPC que usa getAllProducts().
+  const products = await getAllProducts();
+  const product = products.find((p) => p.id === productId);
+  if (!product) throw new Error('Producto no encontrado');
 
   const quantity = Math.max(1, Number(qty) || 1);
   const unitPrice = Number(product.price) || 0;
 
-  const { data: newItem, error: itemErr } = await supabase.from('sale_items').insert([{
-    sale_id: saleId,
-    ref_id: productId,
-    item_type: 'product',
-    name: product.name,
-    unit_price: unitPrice,
-    quantity,
-    subtotal: unitPrice * quantity
-  }]).select().single();
-  must(itemErr, 'No se pudo agregar el artículo');
-
-  const modifierRows = modifierIds.map((modifierId) => ({
-    sale_item_id: newItem.id,
-    modifier_id: modifierId
-  }));
-  const { error: modErr } = await supabase.from('sale_item_modifiers').insert(modifierRows);
-  must(modErr, 'No se pudieron guardar las salsas elegidas');
-
-  // Mismo cálculo que hace comanda_add_item al final: total = suma de subtotales.
-  const { data: items, error: sumErr } = await supabase.from('sale_items').select('subtotal').eq('sale_id', saleId);
-  must(sumErr);
-  const total = (items || []).reduce((acc, row) => acc + (Number(row.subtotal) || 0), 0);
-  const { error: updErr } = await supabase.from('sales').update({ total }).eq('id', saleId);
-  must(updErr, 'No se pudo actualizar el total de la venta');
-
-  const { data: sale, error: selErr } = await supabase.from('sales').select('*').eq('id', saleId).single();
-  must(selErr);
+  const { data: sale, error } = await supabase.rpc('comanda_add_item_with_modifiers', {
+    p_branch_id: getCurrentBranchId(),
+    p_sale_id: saleId,
+    p_ref_id: productId,
+    p_item_type: 'product',
+    p_name: product.name,
+    p_unit_price: unitPrice,
+    p_quantity: quantity,
+    p_modifier_ids: modifierIds && modifierIds.length ? modifierIds : null,
+    p_notes: notes || null
+  });
+  must(error, 'No se pudo agregar el artículo');
   return sale;
 }
 
 // Modificadores (p.ej. salsas de Alitas/Boneless). groupName es opcional:
 // sin él, trae todos los modificadores de todos los grupos (usado por la
 // pantalla de administración de catálogo).
+// modifiers ya no admite SELECT/UPDATE directo para anon (confirmado en
+// prod -- solo deny_anon_direct) -- se resuelve vía get_modifiers_by_branch
+// (RPC ya existente desde 20260820000011, misma que usa ModifierBottomSheet
+// en wing-house-web). El !inner(inventory) original filtraba modificadores
+// sin insumo ligado y traía stock/unit -- se replica con getAllInventory()
+// (esa tabla sigue abierta a SELECT directo hoy) más un join en JS.
 async function getModifiers(groupName) {
-  let query = supabase.from('modifiers').select('*, inventory!inner(stock, unit)');
-  if (groupName) query = query.eq('group_name', groupName);
-  const { data, error } = await query.order('name');
+  const [{ data, error }, inventory] = await Promise.all([
+    supabase.rpc('get_modifiers_by_branch', { p_branch_id: getCurrentBranchId() }),
+    getAllInventory()
+  ]);
   must(error, 'No se pudieron obtener los modificadores');
-  return data || [];
+  const inventoryById = new Map(inventory.map((i) => [i.id, i]));
+  const withInventory = (data || [])
+    .filter((m) => m.inventory_id != null && inventoryById.has(m.inventory_id))
+    .map((m) => {
+      const inv = inventoryById.get(m.inventory_id);
+      return { ...m, inventory: { stock: inv.stock, unit: inv.unit } };
+    });
+  const filtered = groupName ? withInventory.filter((m) => m.group_name === groupName) : withInventory;
+  return filtered.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function updateModifier(id, data) {
-  const update = {};
-  if (data.name !== undefined) update.name = data.name;
-  if (data.inventory_id !== undefined) update.inventory_id = data.inventory_id;
-  if (data.price_extra !== undefined) update.price_extra = data.price_extra != null ? Number(data.price_extra) : null;
   // Cuánto de su insumo consume una porción, en la unidad propia de ese
   // insumo (ver inventory.unit) -- nunca se convierte, igual que
   // recipes.quantity_needed (20260819090200_salsa_stock_real.sql).
-  if (data.qty_needed !== undefined) update.qty_needed = Math.max(0.01, Number(data.qty_needed) || 60);
+  const qtyNeeded = data.qty_needed !== undefined ? Math.max(0.01, Number(data.qty_needed) || 60) : null;
 
-  const { data: row, error } = await supabase.from('modifiers').update(update).eq('id', id).select().single();
+  // OJO: update_modifier (RPC, 20260820000012) hace `price_extra =
+  // p_price_extra` SIN COALESCE (a diferencia de name/inventory_id/
+  // qty_needed, que sí usan COALESCE contra el valor NULL "no tocar") --
+  // mandar NULL aquí borraría el precio extra aunque el llamador no lo haya
+  // tocado (el único caller real, catalog-renderer.js, nunca manda
+  // price_extra). Se preserva el valor actual explícitamente en ese caso.
+  let priceExtra;
+  if (data.price_extra !== undefined) {
+    priceExtra = data.price_extra != null ? Number(data.price_extra) : null;
+  } else {
+    const { data: currentRows, error: curErr } = await supabase.rpc('get_modifiers_by_branch', { p_branch_id: getCurrentBranchId() });
+    must(curErr, 'No se pudo leer el modificador actual');
+    const current = (currentRows || []).find((m) => m.id === id);
+    priceExtra = current ? current.price_extra : null;
+  }
+
+  const { data: row, error } = await supabase.rpc('update_modifier', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_name: data.name !== undefined ? data.name : null,
+    p_inventory_id: data.inventory_id !== undefined ? data.inventory_id : null,
+    p_price_extra: priceExtra,
+    p_qty_needed: qtyNeeded
+  });
   must(error, 'No se pudo actualizar el modificador');
   return row;
 }
@@ -1040,22 +1120,25 @@ async function updateModifier(id, data) {
 // 'Salsas'). Se trae completo de una vez -- son pocas filas -- para que el
 // catálogo de comandas pueda decidir en el cliente si abrir el selector de
 // salsa antes de agregar un producto al carrito.
+// product_modifier_groups no tiene branch_id propio (se acota por
+// product_id -- ver 20260820000013), y nunca admitió SELECT directo con
+// garantía de sucursal para anon (el hallazgo "Arq." de la auditoría
+// original: ni siquiera validaba que productId fuera de esta sucursal).
 async function getAllProductModifierGroups() {
-  const { data, error } = await supabase.from('product_modifier_groups').select('*');
+  const { data, error } = await supabase.rpc('get_product_modifier_groups_by_branch', { p_branch_id: getCurrentBranchId() });
   must(error, 'No se pudieron obtener los grupos de modificadores por producto');
   return data || [];
 }
 
 async function setProductModifierGroup(productId, groupName, enabled, qty = 1) {
-  const { error: delErr } = await supabase.from('product_modifier_groups')
-    .delete().eq('product_id', productId).eq('group_name', groupName);
-  must(delErr, 'No se pudo actualizar el grupo de modificadores');
-
-  if (enabled) {
-    const { error: insErr } = await supabase.from('product_modifier_groups')
-      .insert([{ product_id: productId, group_name: groupName, qty: Math.max(1, Number(qty) || 1) }]);
-    must(insErr, 'No se pudo asignar el grupo de modificadores');
-  }
+  const { error } = await supabase.rpc('set_product_modifier_group', {
+    p_branch_id: getCurrentBranchId(),
+    p_product_id: productId,
+    p_group_name: groupName,
+    p_enabled: !!enabled,
+    p_qty: Math.max(1, Number(qty) || 1)
+  });
+  must(error, 'No se pudo actualizar el grupo de modificadores');
   return true;
 }
 
@@ -1066,11 +1149,14 @@ async function setProductModifierGroup(productId, groupName, enabled, qty = 1) {
 // reutiliza su trigger de descuento/reposición y su validación de stock
 // (ver 20260819090100_combos_schema.sql).
 // ==========================================================================
+// product_components ya no admite SELECT/INSERT/DELETE directo para anon
+// (confirmado en prod -- solo deny_anon_direct) -- se resuelve vía las RPC
+// de 20260820000013.
 async function getComponentsForProduct(productId) {
-  const { data, error } = await supabase
-    .from('product_components')
-    .select('*, component:component_product_id(id, name, price)')
-    .eq('parent_product_id', productId);
+  const { data, error } = await supabase.rpc('get_components_for_product', {
+    p_branch_id: getCurrentBranchId(),
+    p_product_id: productId
+  });
   must(error, 'No se pudieron obtener los componentes del combo');
   return data || [];
 }
@@ -1078,16 +1164,15 @@ async function getComponentsForProduct(productId) {
 // Reemplaza por completo los componentes de un combo con la lista recibida:
 // [{ component_product_id, qty }]
 async function setComponentsForProduct(productId, rows) {
-  const { error: delErr } = await supabase.from('product_components').delete().eq('parent_product_id', productId);
-  must(delErr, 'No se pudo actualizar los componentes del combo');
-
   const clean = (rows || [])
     .filter((r) => r.component_product_id && Number(r.component_product_id) !== Number(productId) && Number(r.qty) > 0)
-    .map((r) => ({ parent_product_id: productId, component_product_id: Number(r.component_product_id), qty: Number(r.qty) }));
+    .map((r) => ({ component_product_id: Number(r.component_product_id), qty: Number(r.qty) }));
 
-  if (clean.length === 0) return [];
-
-  const { data, error } = await supabase.from('product_components').insert(clean).select();
+  const { data, error } = await supabase.rpc('set_components_for_product', {
+    p_branch_id: getCurrentBranchId(),
+    p_product_id: productId,
+    p_rows: clean
+  });
   must(error, 'No se pudieron guardar los componentes del combo');
   return data;
 }
@@ -1095,9 +1180,7 @@ async function setComponentsForProduct(productId, rows) {
 // Todos los combos del catálogo de una vez -- usado por catalog-renderer.js
 // para marcar con el badge "COMBO" los productos que tienen componentes.
 async function getAllProductComponents() {
-  const { data, error } = await supabase
-    .from('product_components')
-    .select('*, parent:parent_product_id(id, name), component:component_product_id(id, name)');
+  const { data, error } = await supabase.rpc('get_all_product_components_by_branch', { p_branch_id: getCurrentBranchId() });
   must(error, 'No se pudieron obtener los componentes de combos');
   return data || [];
 }
@@ -1111,20 +1194,28 @@ async function comandaUpdateItemQty(itemId, quantity) {
   }
   // comanda_update_item_qty ya devuelve la venta actualizada (row_to_json),
   // no un id: no hay que volver a consultarla.
-  const { data: sale, error } = await supabase.rpc('comanda_update_item_qty', { p_item_id, p_quantity });
+  const { data: sale, error } = await supabase.rpc('comanda_update_item_qty', {
+    p_branch_id: getCurrentBranchId(),
+    p_item_id,
+    p_quantity
+  });
   must(error, 'No se pudo actualizar la cantidad');
   return sale;
 }
 
 async function comandaRemoveItem(itemId) {
   // comanda_remove_item también devuelve la venta actualizada directamente.
-  const { data: sale, error } = await supabase.rpc('comanda_remove_item', { p_item_id: itemId });
+  const { data: sale, error } = await supabase.rpc('comanda_remove_item', {
+    p_branch_id: getCurrentBranchId(),
+    p_item_id: itemId
+  });
   must(error, 'No se pudo quitar el artículo');
   return sale;
 }
 
 async function comandaCloseTable(saleId, payload, openedBy, cashierId) {
   const { data, error } = await supabase.rpc('close_table', {
+    p_branch_id: getCurrentBranchId(),
     p_sale_id: saleId,
     p_discount: Number(payload.discount) || 0,
     p_payment_method: payload.paymentMethod || 'efectivo',
@@ -1134,10 +1225,11 @@ async function comandaCloseTable(saleId, payload, openedBy, cashierId) {
   must(error, 'No se pudo cerrar la mesa');
 
   if (cashierId != null) {
-    const { error: updErr } = await supabase
-      .from('sales')
-      .update({ cashier_user_id: cashierId, branch_id: getCurrentBranchId() })
-      .eq('id', data.id);
+    const { error: updErr } = await supabase.rpc('set_sale_cashier', {
+      p_branch_id: getCurrentBranchId(),
+      p_sale_id: data.id,
+      p_cashier_user_id: cashierId
+    });
     if (updErr) console.error('No se pudo asociar el cajero a la mesa:', updErr.message);
   }
 
@@ -1145,10 +1237,10 @@ async function comandaCloseTable(saleId, payload, openedBy, cashierId) {
 }
 
 async function comandaCancelTable(saleId) {
-  const { data: sale, error: selErr } = await supabase.from('sales').select('status').eq('id', saleId).maybeSingle();
+  const { data: sale, error: selErr } = await supabase.from('sales').select('status').eq('id', saleId).eq('branch_id', getCurrentBranchId()).maybeSingle();
   must(selErr);
   if (!sale || sale.status !== 'abierta') throw new Error('Solo se puede cancelar una mesa abierta.');
-  const { error } = await supabase.rpc('cancel_table', { p_sale_id: saleId });
+  const { error } = await supabase.rpc('cancel_table', { p_sale_id: saleId, p_branch_id: getCurrentBranchId() });
   must(error, 'No se pudo cancelar la mesa');
   return { cancelled: true };
 }
@@ -1177,50 +1269,41 @@ async function getKdsOrders() {
   const { data: sales, error } = await supabase
     .from('sales')
     .select('id, table_number, client_type, folio, status, created_at, kds_status, kds_started_at, kds_ready_at, is_delivery, delivery_fee, driver_name, total')
+    .eq('branch_id', getCurrentBranchId())
     .neq('kds_status', 'entregada')
     .neq('status', 'cancelada')
     .order('created_at', { ascending: true });
   must(error, 'No se pudieron obtener las órdenes de cocina');
   if (!sales || sales.length === 0) return [];
 
-  const { data: items, error: itemsErr } = await supabase
-    .from('sale_items')
-    .select('sale_id, name, quantity, notes, ref_id, item_type, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
-    .in('sale_id', sales.map((s) => s.id))
-    .order('id', { ascending: true });
-  must(itemsErr, 'No se pudieron obtener los artículos de las órdenes de cocina');
+  const items = await getSaleItemsWithModifiers(sales.map((s) => s.id));
+
+  // modifiers y product_components ya no se pueden embeber en el select de
+  // arriba (RLS los cierra para anon desde 20260820080000) -- se resuelven
+  // aparte, una sola vez, vía RPC de solo lectura de esta sucursal.
+  const modifierNameMap = await getModifierNameMap();
 
   // Combos: si el ref_id de un renglón tiene componentes (ver
   // product_components/PARTE del comentario en 20260819090100_combos_schema.sql),
   // cocina necesita ver "+ 2x Papa Francesa" bajo el combo, no solo el
   // nombre de la promo -- la cantidad mostrada ya viene multiplicada por la
   // cantidad vendida del renglón.
-  const comboProductIds = [...new Set(
-    (items || [])
-      .filter((it) => (it.item_type || 'product') === 'product' && it.ref_id != null)
-      .map((it) => it.ref_id)
-  )];
-
-  let componentsByProduct = {};
-  if (comboProductIds.length > 0) {
-    const { data: components, error: compErr } = await supabase
-      .from('product_components')
-      .select('parent_product_id, qty, component:component_product_id(name)')
-      .in('parent_product_id', comboProductIds);
-    must(compErr, 'No se pudieron obtener los componentes de combo para cocina');
-    (components || []).forEach((c) => {
-      if (!c.component) return;
-      if (!componentsByProduct[c.parent_product_id]) componentsByProduct[c.parent_product_id] = [];
-      componentsByProduct[c.parent_product_id].push({ name: c.component.name, qty: Number(c.qty) || 0 });
-    });
-  }
+  const { data: allComponents, error: compErr } = await supabase.rpc('get_all_product_components_by_branch', {
+    p_branch_id: getCurrentBranchId()
+  });
+  must(compErr, 'No se pudieron obtener los componentes de combo para cocina');
+  const componentsByProduct = {};
+  (allComponents || []).forEach((c) => {
+    if (!componentsByProduct[c.parent_product_id]) componentsByProduct[c.parent_product_id] = [];
+    componentsByProduct[c.parent_product_id].push({ name: c.component_name, qty: Number(c.qty) || 0 });
+  });
 
   const itemsBySale = {};
   (items || []).forEach((it) => {
     if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
     const quantity = Number(it.quantity) || 0;
     const modifiers = (it.sale_item_modifiers || [])
-      .map((sim) => sim.modifiers?.name)
+      .map((sim) => modifierNameMap.get(sim.modifier_id))
       .filter(Boolean);
     const components = (componentsByProduct[it.ref_id] || [])
       .map((c) => ({ name: c.name, quantity: c.qty * quantity }));
@@ -1246,28 +1329,15 @@ async function getKdsOrders() {
 
 async function updateKdsStatus(saleId, status) {
   if (!KDS_STATUSES.includes(status)) throw new Error(`Estado de KDS inválido: ${status}`);
-  const patch = { kds_status: status };
-  const tsColumn = KDS_TIMESTAMP_COLUMN[status];
-  if (tsColumn) patch[tsColumn] = new Date().toISOString();
-
-  // Pedidos "para llevar" pagados desde la web (client_type='Llevar', ver
-  // process_sale/wing-house-web/comandas.jsx) nacen 'abierta' para que
-  // cocina los vea (20260819090300_fix_web_takeout_stays_open.sql), pero
-  // nadie más los cierra: no pasan por close_table (ya se cobraron al
-  // pedirse) ni por comandaSetDeliveryStatus (no son domicilio). Marcarlos
-  // 'entregada' aquí -- el cliente recoge su pedido -- es el único momento
-  // que le queda a la app para cerrarlos. NO aplica a 'Para llevar' (el
-  // botón de Comandas de escritorio, que se cobra después con
-  // close_table), a domicilio (cierra con comandaSetDeliveryStatus, que
-  // además fija payment_status) ni a mesa.
-  if (status === 'entregada') {
-    const { data: sale } = await supabase.from('sales').select('client_type').eq('id', saleId).maybeSingle();
-    if (sale && sale.client_type === 'Llevar') {
-      patch.status = 'completada';
-    }
-  }
-
-  const { error } = await supabase.from('sales').update(patch).eq('id', saleId);
+  // update_kds_status (RPC) ya reproduce esta misma regla del lado del
+  // servidor -- ver 20260820020000_rpc_branch_id_core_sales.sql -- incluida
+  // la columna de timestamp por estado y el cierre automático de pedidos
+  // 'Llevar' al llegar a 'entregada'.
+  const { error } = await supabase.rpc('update_kds_status', {
+    p_branch_id: getCurrentBranchId(),
+    p_sale_id: saleId,
+    p_status: status
+  });
   must(error, 'No se pudo actualizar el estado de cocina');
   return true;
 }
@@ -1277,10 +1347,19 @@ async function updateKdsStatus(saleId, status) {
 // llamador (main.js) simplemente vuelve a pedir getKdsOrders() completo en
 // cada evento -- mismo patrón simple que subscribeToNewSales, sin intentar
 // aplicar parches incrementales del lado del cliente.
+// sale_items no tiene columna branch_id propia (hereda la sucursal de su
+// venta vía sale_id), así que postgres_changes no puede filtrarla del lado
+// del servidor -- Realtime solo filtra por columnas de la misma tabla. Con
+// esto, el evento de "se agregó un renglón" de otra sucursal SÍ llega a
+// este canal (aunque getKdsOrders(), ya filtrado por sucursal, ignore el
+// contenido y solo lo use como señal de "vuelve a pedir"). Queda
+// documentado como deuda -- ver auditoría A6 -- la solución completa es
+// desnormalizar branch_id a sale_items o mover este refresco a un canal
+// broadcast propio por sucursal.
 function subscribeToKdsChanges(onChange) {
   return supabase
     .channel('kds-changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sales', filter: `branch_id=eq.${getCurrentBranchId()}` }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, onChange)
     .subscribe();
 }
@@ -1300,29 +1379,17 @@ async function createInventoryItem(data, user = null) {
   const initialStock = Number(data.stock) || 0;
   if (initialStock < 0) throw new Error('La existencia inicial no puede ser negativa.');
 
-  const { data: row, error } = await supabase.from('inventory').insert([{
-    name,
-    category: data.category || null,
-    unit: data.unit || 'pz',
-    stock: initialStock,
-    min_stock: Number(data.min_stock) || 0,
-    cost_per_unit: Number(data.cost_per_unit) || 0,
-    branch_id: getCurrentBranchId()
-  }]).select().single();
-  if (error && error.code === '23505') throw new Error(`Ya existe un insumo llamado "${name}".`);
+  const { data: row, error } = await supabase.rpc('create_inventory_item', {
+    p_branch_id: getCurrentBranchId(),
+    p_name: name,
+    p_category: data.category || null,
+    p_unit: data.unit || 'pz',
+    p_stock: initialStock,
+    p_min_stock: Number(data.min_stock) || 0,
+    p_cost_per_unit: Number(data.cost_per_unit) || 0,
+    p_created_by: user
+  });
   must(error, 'No se pudo crear el insumo');
-
-  if (initialStock > 0) {
-    const { error: movErr } = await supabase.from('inventory_movements').insert([{
-      insumo_id: row.id,
-      type: 'entrada',
-      quantity: initialStock,
-      reason: 'Alta de insumo - existencia inicial',
-      created_by: user
-    }]);
-    if (movErr) console.error('No se pudo registrar el movimiento de alta:', movErr.message);
-  }
-
   return row;
 }
 
@@ -1330,45 +1397,26 @@ async function updateInventoryItem(id, data, user = null) {
   const name = String(data.name || '').trim();
   if (!name) throw new Error('El nombre del insumo es obligatorio.');
 
-  const { data: before, error: beforeErr } = await supabase.from('inventory').select('*').eq('id', id).single();
-  must(beforeErr, 'Insumo no encontrado');
-
   const newStock = Number(data.stock) || 0;
   if (newStock < 0) throw new Error('La existencia no puede ser negativa.');
 
-  const { error } = await supabase.from('inventory').update({
-    name,
-    category: data.category || null,
-    unit: data.unit || 'pz',
-    stock: newStock,
-    min_stock: Number(data.min_stock) || 0,
-    cost_per_unit: Number(data.cost_per_unit) || 0,
-    updated_at: new Date().toISOString()
-  }).eq('id', id);
-  if (error && error.code === '23505') throw new Error(`Ya existe un insumo llamado "${name}".`);
+  const { data: row, error } = await supabase.rpc('update_inventory_item', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_name: name,
+    p_category: data.category || null,
+    p_unit: data.unit || 'pz',
+    p_stock: newStock,
+    p_min_stock: Number(data.min_stock) || 0,
+    p_cost_per_unit: Number(data.cost_per_unit) || 0,
+    p_created_by: user
+  });
   must(error, 'No se pudo actualizar el insumo');
-
-  const delta = newStock - Number(before.stock || 0);
-  if (delta !== 0) {
-    const { error: movErr } = await supabase.from('inventory_movements').insert([{
-      insumo_id: Number(id),
-      type: 'ajuste',
-      quantity: delta,
-      reason: 'Ajuste manual desde edición de insumo',
-      created_by: user
-    }]);
-    if (movErr) console.error('No se pudo registrar el movimiento de ajuste:', movErr.message);
-  }
-
-  const { data: row, error: selErr } = await supabase.from('inventory').select('*').eq('id', id).single();
-  must(selErr);
   return row;
 }
 
 async function removeInventoryItem(id) {
-  const { error: nullErr } = await supabase.from('waste').update({ inventory_id: null }).eq('inventory_id', id);
-  must(nullErr);
-  const { error } = await supabase.from('inventory').delete().eq('id', id);
+  const { error } = await supabase.rpc('remove_inventory_item', { p_branch_id: getCurrentBranchId(), p_id: id });
   must(error, 'No se pudo eliminar el insumo');
   return { deleted: true };
 }
@@ -1382,29 +1430,17 @@ async function addInventoryStock(id, data, user = null) {
     throw new Error('La cantidad a agregar debe ser mayor que cero.');
   }
 
-  const { data: item, error: selErr } = await supabase.from('inventory').select('*').eq('id', id).single();
-  must(selErr, 'Insumo no encontrado');
+  const hasCost = data.cost_per_unit !== undefined && data.cost_per_unit !== null && data.cost_per_unit !== '';
 
-  const update = {
-    stock: Number(item.stock || 0) + quantity,
-    updated_at: new Date().toISOString()
-  };
-  if (data.cost_per_unit !== undefined && data.cost_per_unit !== null && data.cost_per_unit !== '') {
-    update.cost_per_unit = Number(data.cost_per_unit) || 0;
-  }
-
-  const { data: row, error } = await supabase.from('inventory').update(update).eq('id', id).select().single();
+  const { data: row, error } = await supabase.rpc('add_inventory_stock', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_quantity: quantity,
+    p_cost_per_unit: hasCost ? Number(data.cost_per_unit) || 0 : null,
+    p_reason: data.reason || 'Compra',
+    p_created_by: user
+  });
   must(error, 'No se pudo agregar la existencia');
-
-  const { error: movErr } = await supabase.from('inventory_movements').insert([{
-    insumo_id: Number(id),
-    type: 'entrada',
-    quantity,
-    reason: data.reason || 'Compra',
-    created_by: user
-  }]);
-  if (movErr) console.error('No se pudo registrar el movimiento de entrada:', movErr.message);
-
   return row;
 }
 
@@ -1432,11 +1468,17 @@ async function checkLowStockInventory() {
 // ==========================================================================
 // 6.1 RECETAS (liga productos del catálogo con los insumos que consumen)
 // ==========================================================================
+// recipes ya no admite SELECT/INSERT/DELETE directo para anon (mismo
+// motivo que product_components -- ver 20260820000013). Ninguna de estas
+// RPC devuelve el embed `inventory:insumo_id(...)` anidado que traía el
+// select viejo -- devuelven columnas planas (insumo_name/insumo_unit/...);
+// donde algún llamador seguía esperando `.inventory.x` anidado, se
+// reconstruye aquí mismo para no tocar catalog-renderer.js/common.js.
 async function getRecipesForProduct(productId) {
-  const { data, error } = await supabase
-    .from('recipes')
-    .select('*, inventory:insumo_id(id, name, unit, stock, cost_per_unit)')
-    .eq('product_id', productId);
+  const { data, error } = await supabase.rpc('get_recipes_for_product', {
+    p_branch_id: getCurrentBranchId(),
+    p_product_id: productId
+  });
   must(error, 'No se pudo obtener la receta del producto');
   return data;
 }
@@ -1444,29 +1486,27 @@ async function getRecipesForProduct(productId) {
 // Reemplaza por completo la receta de un producto con la lista recibida:
 // [{ insumo_id, quantity_needed }]
 async function setRecipesForProduct(productId, rows) {
-  const { error: delErr } = await supabase.from('recipes').delete().eq('product_id', productId);
-  must(delErr, 'No se pudo actualizar la receta');
-
   const clean = (rows || [])
     .filter((r) => r.insumo_id && Number(r.quantity_needed) > 0)
-    .map((r) => ({ product_id: productId, insumo_id: Number(r.insumo_id), quantity_needed: Number(r.quantity_needed) }));
+    .map((r) => ({ insumo_id: Number(r.insumo_id), quantity_needed: Number(r.quantity_needed) }));
 
-  if (clean.length === 0) return [];
-
-  const { data, error } = await supabase.from('recipes').insert(clean).select();
+  const { data, error } = await supabase.rpc('set_recipes_for_product', {
+    p_branch_id: getCurrentBranchId(),
+    p_product_id: productId,
+    p_rows: clean
+  });
   must(error, 'No se pudo guardar la receta');
   return data;
 }
 
 // Costo real de un producto según su receta (suma de insumo.cost_per_unit * quantity_needed).
 async function getRecipeCost(productId) {
-  const { data, error } = await supabase
-    .from('recipes')
-    .select('quantity_needed, inventory:insumo_id(cost_per_unit)')
-    .eq('product_id', productId);
+  const { data, error } = await supabase.rpc('get_recipe_cost', {
+    p_branch_id: getCurrentBranchId(),
+    p_product_id: productId
+  });
   must(error, 'No se pudo calcular el costo de receta');
-  if (!data || data.length === 0) return null;
-  return data.reduce((sum, r) => sum + Number(r.quantity_needed) * Number(r.inventory ? r.inventory.cost_per_unit : 0), 0);
+  return data;
 }
 
 // Todas las recetas con la existencia/mínimo actual del insumo y el nombre
@@ -1474,31 +1514,31 @@ async function getRecipeCost(productId) {
 // calculen el semáforo de disponibilidad (verde/amarillo/rojo/sin receta)
 // sin pedir producto por producto.
 async function getAllRecipesWithStock() {
-  const { data, error } = await supabase
-    .from('recipes')
-    .select('product_id, insumo_id, quantity_needed, inventory:insumo_id(id, name, unit, stock, min_stock), products:product_id(id, name)');
+  const { data, error } = await supabase.rpc('get_all_recipes_with_stock', { p_branch_id: getCurrentBranchId() });
   must(error, 'No se pudo obtener las recetas con existencia');
-  return data;
+  return (data || []).map((r) => ({
+    product_id: r.product_id,
+    insumo_id: r.insumo_id,
+    quantity_needed: r.quantity_needed,
+    inventory: { id: r.insumo_id, name: r.insumo_name, unit: r.insumo_unit, stock: r.insumo_stock, min_stock: r.insumo_min_stock }
+  }));
 }
 
 // IDs de productos que ya tienen receta configurada (para marcar "Sin receta" en catálogo).
 async function getProductIdsWithRecipe() {
-  const { data, error } = await supabase.from('recipes').select('product_id');
+  const { data, error } = await supabase.rpc('get_product_ids_with_recipe', { p_branch_id: getCurrentBranchId() });
   must(error, 'No se pudo obtener la lista de recetas');
-  return Array.from(new Set((data || []).map((r) => r.product_id)));
+  return (data || []).map((r) => r.product_id);
 }
 
 // Costo real (según receta) de todos los productos en una sola consulta,
 // para mostrarlo en el catálogo sin hacer una llamada por producto.
 async function getAllRecipeCosts() {
-  const { data, error } = await supabase
-    .from('recipes')
-    .select('product_id, quantity_needed, inventory:insumo_id(cost_per_unit)');
+  const { data, error } = await supabase.rpc('get_all_recipe_costs', { p_branch_id: getCurrentBranchId() });
   must(error, 'No se pudo calcular el costo de las recetas');
   const costsByProduct = {};
   (data || []).forEach((r) => {
-    const cost = Number(r.quantity_needed) * Number(r.inventory ? r.inventory.cost_per_unit : 0);
-    costsByProduct[r.product_id] = (costsByProduct[r.product_id] || 0) + cost;
+    costsByProduct[r.product_id] = Number(r.cost) || 0;
   });
   return costsByProduct;
 }
@@ -1507,7 +1547,7 @@ async function getAllRecipeCosts() {
 // 7. MERMA
 // ==========================================================================
 async function getAllWaste(filters = {}) {
-  let query = supabase.from('waste').select('*');
+  let query = supabase.from('waste').select('*').eq('branch_id', getCurrentBranchId());
   if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T00:00:00`);
   if (filters.dateTo) query = query.lte('created_at', `${filters.dateTo}T23:59:59.999`);
   if (filters.tipo) query = query.eq('tipo', filters.tipo);
@@ -1518,44 +1558,24 @@ async function getAllWaste(filters = {}) {
 }
 
 async function createWaste(data) {
-  let cost = Number(data.cost) || 0;
-  let itemName = data.item_name;
-  let unit = data.unit || 'pza';
   const tipo = data.tipo === 'consumo_interno' ? 'consumo_interno' : 'merma';
   const autorizadoPor = tipo === 'consumo_interno' ? String(data.autorizado_por || '').trim() : null;
   if (tipo === 'consumo_interno' && !autorizadoPor) {
     throw new Error('Indica qué jefe autoriza el consumo interno.');
   }
-  const reason =
-    tipo === 'consumo_interno'
-      ? `CONSUMO JEFE - ${autorizadoPor} - ${data.reason || 'Sin especificar'}`
-      : data.reason || 'Sin especificar';
 
-  if (data.inventory_id) {
-    const { data: invItem, error } = await supabase.from('inventory').select('*').eq('id', data.inventory_id).maybeSingle();
-    must(error);
-    if (invItem) {
-      itemName = invItem.name;
-      unit = invItem.unit;
-      if (!data.cost) cost = invItem.cost_per_unit * Number(data.quantity || 0);
-      const newStock = Math.max(0, invItem.stock - Number(data.quantity || 0));
-      const { error: updErr } = await supabase.from('inventory')
-        .update({ stock: newStock, updated_at: new Date().toISOString() }).eq('id', data.inventory_id);
-      must(updErr);
-    }
-  }
-
-  const { data: row, error: insErr } = await supabase.from('waste').insert([{
-    inventory_id: data.inventory_id || null,
-    item_name: itemName,
-    quantity: Number(data.quantity) || 0,
-    unit,
-    reason,
-    cost,
-    tipo,
-    autorizado_por: autorizadoPor
-  }]).select().single();
-  must(insErr, 'No se pudo registrar la merma');
+  const { data: row, error } = await supabase.rpc('create_waste_entry', {
+    p_branch_id: getCurrentBranchId(),
+    p_inventory_id: data.inventory_id || null,
+    p_item_name: data.item_name,
+    p_quantity: Number(data.quantity) || 0,
+    p_unit: data.unit || 'pza',
+    p_reason: data.reason,
+    p_cost: data.cost ? Number(data.cost) : null,
+    p_tipo: tipo,
+    p_autorizado_por: autorizadoPor
+  });
+  must(error, 'No se pudo registrar la merma');
   return row;
 }
 
@@ -1574,19 +1594,19 @@ async function getAllCosts(filters = {}) {
 
 async function createCost(data) {
   const fallbackDate = data.date || new Date().toISOString().slice(0, 10);
-  const { data: row, error } = await supabase.from('costs').insert([{
-    concept: data.concept,
-    category: data.category || 'variable',
-    amount: Number(data.amount) || 0,
-    date: fallbackDate,
-    branch_id: getCurrentBranchId()
-  }]).select().single();
+  const { data: row, error } = await supabase.rpc('create_cost', {
+    p_branch_id: getCurrentBranchId(),
+    p_concept: data.concept,
+    p_category: data.category || 'variable',
+    p_amount: Number(data.amount) || 0,
+    p_date: fallbackDate
+  });
   must(error, 'No se pudo registrar el gasto');
   return row;
 }
 
 async function removeCost(id) {
-  const { error } = await supabase.from('costs').delete().eq('id', id);
+  const { error } = await supabase.rpc('remove_cost', { p_branch_id: getCurrentBranchId(), p_id: id });
   must(error, 'No se pudo eliminar el gasto');
   return { deleted: true };
 }
@@ -1722,14 +1742,11 @@ async function getCorteResumen(fecha) {
 // Crea/actualiza el fondo inicial del día (upsert por fecha+sucursal: el
 // admin puede corregirlo antes de cerrar sin generar renglones duplicados).
 async function setCashCutFondoInicial(fecha, fondoInicial) {
-  const { data, error } = await supabase
-    .from('cash_cuts')
-    .upsert(
-      { fecha, branch_id: getCurrentBranchId(), fondo_inicial: Number(fondoInicial) || 0 },
-      { onConflict: 'fecha,branch_id' }
-    )
-    .select()
-    .single();
+  const { data, error } = await supabase.rpc('set_cash_cut_fondo_inicial', {
+    p_branch_id: getCurrentBranchId(),
+    p_fecha: fecha,
+    p_fondo_inicial: Number(fondoInicial) || 0
+  });
   must(error, 'No se pudo guardar el fondo inicial');
   return data;
 }
@@ -1743,41 +1760,24 @@ async function createCashMovement(data) {
   const fecha = data.fecha || new Date().toISOString().slice(0, 10);
   const concepto = String(data.concepto || '').trim();
   if (!concepto) throw new Error('El concepto de la salida es obligatorio.');
-  const monto = Number(data.monto) || 0;
-  const metodoPago = data.metodo_pago || 'efectivo';
-  const categoriaCosto = data.categoria_costo || 'otros';
 
-  const { data: row, error } = await supabase
-    .from('cash_movements')
-    .insert([{
-      fecha,
-      concepto,
-      monto,
-      metodo_pago: metodoPago,
-      categoria_costo: categoriaCosto,
-      branch_id: getCurrentBranchId()
-    }])
-    .select()
-    .single();
+  // create_cash_movement (RPC) hace el mismo espejo en costs del lado del
+  // servidor -- ver 20260820040000_rpc_branch_id_cash_and_costs.sql -- sin
+  // revertir cash_movements si ese espejo falla, igual que aquí antes.
+  const { data: row, error } = await supabase.rpc('create_cash_movement', {
+    p_branch_id: getCurrentBranchId(),
+    p_fecha: fecha,
+    p_concepto: concepto,
+    p_monto: Number(data.monto) || 0,
+    p_metodo_pago: data.metodo_pago || 'efectivo',
+    p_categoria_costo: data.categoria_costo || 'otros'
+  });
   must(error, 'No se pudo registrar la salida de caja');
-
-  const { error: costErr } = await supabase.from('costs').insert([{
-    concept: concepto,
-    category: mapCashCategoryToCostCategory(categoriaCosto),
-    amount: monto,
-    date: fecha,
-    metodo_pago: metodoPago,
-    branch_id: getCurrentBranchId()
-  }]);
-  // No se revierte cash_movements si esto falla: la salida de caja ya es
-  // real y debe quedar registrada aunque el espejo en Costos falle.
-  if (costErr) console.error('No se pudo espejar la salida en costs:', costErr.message);
-
   return row;
 }
 
 async function removeCashMovement(id) {
-  const { error } = await supabase.from('cash_movements').delete().eq('id', id);
+  const { error } = await supabase.rpc('remove_cash_movement', { p_branch_id: getCurrentBranchId(), p_id: id });
   must(error, 'No se pudo eliminar la salida de caja');
   return { deleted: true };
 }
@@ -1792,45 +1792,20 @@ async function closeCashCut(fecha, efectivoReal, closedBy) {
   const real = Number(efectivoReal) || 0;
   const cerradoPor = closedBy || 'admin';
 
-  const { data: existing, error: findErr } = await supabase
-    .from('cash_cuts')
-    .select('id')
-    .eq('fecha', fecha)
-    .eq('branch_id', getCurrentBranchId())
-    .maybeSingle();
-  if (findErr) {
-    console.error('[closeCashCut] Error buscando corte existente:', findErr);
-    throw new Error(`No se pudo cerrar el corte de caja: ${findErr.message}`);
-  }
-
-  const payload = {
-    fecha,
-    branch_id: getCurrentBranchId(),
-    fondo_inicial: resumen.fondoInicial,
-    efectivo_real: real,
-    cerrado_por: cerradoPor,
-    cerrado_at: new Date().toISOString()
-  };
-
-  // Si ya existe el corte del día (p.ej. se reintentó tras un fallo), se
-  // actualiza en vez de intentar un insert que chocaría con el UNIQUE(fecha,
-  // branch_id) — no dependemos de upsert/onConflict porque falla en seco si
-  // ese constraint no está creado todavía en la base.
-  const query = existing
-    ? supabase.from('cash_cuts').update(payload).eq('id', existing.id)
-    : supabase.from('cash_cuts').insert([payload]);
-  const { data, error } = await query.select().single();
+  // close_cash_cut (RPC) hace el mismo "actualiza si ya existe, si no
+  // inserta" -- ver 20260820040000_rpc_branch_id_cash_and_costs.sql -- el
+  // cálculo de esperado/diferencia sigue en JS porque ya viene de
+  // getCorteResumen (lectura).
+  const { data, error } = await supabase.rpc('close_cash_cut', {
+    p_branch_id: getCurrentBranchId(),
+    p_fecha: fecha,
+    p_fondo_inicial: resumen.fondoInicial,
+    p_efectivo_real: real,
+    p_cerrado_por: cerradoPor
+  });
 
   if (error) {
-    console.error('[closeCashCut] Error real de Supabase:', {
-      message: error.message,
-      code: error.code,
-      details: error.details,
-      hint: error.hint,
-      fecha,
-      branch_id: getCurrentBranchId(),
-      existente: !!existing
-    });
+    console.error('[closeCashCut] Error real de Supabase:', error);
     throw new Error(`No se pudo cerrar el corte de caja: ${error.message}`);
   }
 
@@ -1871,20 +1846,22 @@ async function computeProfitability(dateFrom, dateTo) {
 
   const { data: sales, error: salesErr } = await supabase
     .from('sales').select('total, payment_method, created_at')
-    .eq('status', 'completada').gte('created_at', fromTs).lte('created_at', toTs);
+    .eq('status', 'completada').eq('branch_id', getCurrentBranchId()).gte('created_at', fromTs).lte('created_at', toTs);
   must(salesErr, 'No se pudo calcular el reporte');
 
   const { data: wasteRows, error: wasteErr } = await supabase
-    .from('waste').select('cost').gte('created_at', fromTs).lte('created_at', toTs);
+    .from('waste').select('cost').eq('branch_id', getCurrentBranchId()).gte('created_at', fromTs).lte('created_at', toTs);
   must(wasteErr);
 
   const { data: costRows, error: costErr } = await supabase
-    .from('costs').select('amount').gte('date', dateFrom).lte('date', dateTo);
+    .from('costs').select('amount').eq('branch_id', getCurrentBranchId()).gte('date', dateFrom).lte('date', dateTo);
   must(costErr);
 
-  const { data: items, error: itemsErr } = await supabase
-    .from('sale_items').select('name, quantity, subtotal, sales!inner(status, created_at)')
-    .eq('sales.status', 'completada').gte('sales.created_at', fromTs).lte('sales.created_at', toTs);
+  const { data: items, error: itemsErr } = await supabase.rpc('get_sale_items_summary', {
+    p_branch_id: getCurrentBranchId(),
+    p_from: fromTs,
+    p_to: toTs
+  });
   must(itemsErr);
 
   const totalSales = (sales || []).reduce((sum, s) => sum + Number(s.total || 0), 0);
@@ -1936,6 +1913,7 @@ async function getAllEmployees() {
     const { data, error } = await supabase
         .from('employees')
         .select('*')
+        .eq('branch_id', getCurrentBranchId())
         .order('active', { ascending: false })
         .order('name', { ascending: true });
 
@@ -1978,6 +1956,11 @@ async function createEmployee(data) {
         active
     });
 
+    // PENDIENTE: create_employee todavía no recibe p_branch_id -- RPC "caja
+    // negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql. Agregar
+    // `p_branch_id: getCurrentBranchId()` aquí en cuanto exista 0009-parte-2
+    // (y employees.branch_id ya no dependa del DEFAULT -- ver
+    // 20260820900000_drop_branch_default_RUN_LAST.sql).
     const { data: row, error } = await supabase.rpc(
         'create_employee',
         {
@@ -2006,30 +1989,23 @@ async function createEmployee(data) {
 }
 
 async function updateEmployee(id, data) {
-  const { error } = await supabase.from('employees').update({
-    name: data.name,
-    role: data.role || 'Personal',
-    salary: Number(data.salary) || 0,
-    weekly_bonus: Number(data.weekly_bonus) || 0,
-    active: data.active !== false
-  }).eq('id', id);
+  const { data: row, error } = await supabase.rpc('update_employee', {
+    p_branch_id: getCurrentBranchId(),
+    p_id: id,
+    p_name: data.name,
+    p_role: data.role || 'Personal',
+    p_salary: Number(data.salary) || 0,
+    p_weekly_bonus: Number(data.weekly_bonus) || 0,
+    p_active: data.active !== false
+  });
   must(error, 'No se pudo actualizar el empleado');
-  const { data: row, error: selErr } = await supabase.from('employees').select('*').eq('id', id).single();
-  must(selErr);
   return row;
 }
 
 async function removeEmployee(id) {
-  const { count, error } = await supabase.from('attendance').select('id', { count: 'exact', head: true }).eq('employee_id', id);
-  must(error);
-  if (count && count > 0) {
-    const { error: deErr } = await supabase.from('employees').update({ active: false }).eq('id', id);
-    must(deErr, 'No se pudo desactivar el empleado');
-    return { deleted: false, deactivated: true };
-  }
-  const { error: delErr } = await supabase.from('employees').delete().eq('id', id);
-  must(delErr, 'No se pudo eliminar el empleado');
-  return { deleted: true, deactivated: false };
+  const { data, error } = await supabase.rpc('remove_employee', { p_branch_id: getCurrentBranchId(), p_id: id });
+  must(error, 'No se pudo eliminar el empleado');
+  return data;
 }
 
 function localDateStr(d = new Date()) {
@@ -2057,6 +2033,8 @@ async function getAllAttendance(filters = {}) {
   return data;
 }
 
+// PENDIENTE: register_attendance todavía no recibe p_branch_id -- RPC "caja
+// negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql.
 async function registerAttendance(employeeId) {
   const { data, error } = await supabase.rpc('register_attendance', { p_employee_id: employeeId });
   must(error, 'No se pudo registrar la asistencia');
@@ -2067,7 +2045,7 @@ async function registerAttendance(employeeId) {
 // 11. NÓMINA
 // ==========================================================================
 async function getPayrollWeek(weekStart) {
-  const { data: employees, error } = await supabase.from('employees').select('*').eq('active', true).order('name');
+  const { data: employees, error } = await supabase.from('employees').select('*').eq('branch_id', getCurrentBranchId()).eq('active', true).order('name');
   must(error, 'No se pudieron obtener los empleados');
   const { data: records, error: recErr } = await supabase.from('payroll_weeks').select('*').eq('week_start', weekStart);
   must(recErr, 'No se pudo obtener la nómina de la semana');
@@ -2186,7 +2164,7 @@ async function getEmployeesWithAttendanceHistory() {
 
 async function getPayrollData(weekStart, weekEnd) {
   const { data: employees, error: empErr } = await supabase
-    .from('employees').select('*').eq('active', true).order('name');
+    .from('employees').select('*').eq('branch_id', getCurrentBranchId()).eq('active', true).order('name');
   must(empErr, 'No se pudieron obtener los empleados');
 
   // Bono acreditado y crédito semanal por excedente viven en payroll_weeks /
@@ -2231,6 +2209,7 @@ async function getPayrollData(weekStart, weekEnd) {
     .select('employee_id, employee_benefit_before, employee_benefit_after')
     .eq('client_type', 'employee')
     .eq('status', 'completada')
+    .eq('branch_id', getCurrentBranchId())
     .gte('created_at', `${weekStart}T00:00:00`)
     .lte('created_at', `${weekEnd}T23:59:59.999`);
   must(consErr, 'No se pudo obtener el beneficio de empleados de la semana');
@@ -2325,7 +2304,7 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
   must(credErr, 'No se pudieron obtener los créditos del empleado');
 
   const { data: employee, error: empErr } = await supabase
-    .from('employees').select('id').eq('name', employeeName).maybeSingle();
+    .from('employees').select('id').eq('name', employeeName).eq('branch_id', getCurrentBranchId()).maybeSingle();
   must(empErr);
 
   let beneficio = [];
@@ -2473,15 +2452,12 @@ async function getUnifiedHistory(filters = {}) {
   const saleIds = (sales || []).map((s) => s.id);
   let itemsBySale = {};
   if (saleIds.length > 0) {
-    const { data: items, error: itemsErr } = await supabase
-      .from('sale_items')
-      .select('sale_id, name, quantity, unit_price, subtotal, sale_item_modifiers(id, modifier_id, modifiers(id, name))')
-      .in('sale_id', saleIds);
-    must(itemsErr, 'No se pudo obtener el detalle de artículos del historial');
+    const items = await getSaleItemsWithModifiers(saleIds);
+    const modifierNameMap = await getModifierNameMap();
     (items || []).forEach((it) => {
       if (!itemsBySale[it.sale_id]) itemsBySale[it.sale_id] = [];
       const modifiers = (it.sale_item_modifiers || [])
-        .map((sim) => sim.modifiers?.name)
+        .map((sim) => modifierNameMap.get(sim.modifier_id))
         .filter(Boolean);
       itemsBySale[it.sale_id].push({ ...it, modifiers });
     });
@@ -2490,6 +2466,7 @@ async function getUnifiedHistory(filters = {}) {
   const { data: waste, error: wasteErr } = await supabase
     .from('waste')
     .select('*')
+    .eq('branch_id', getCurrentBranchId())
     .in('tipo', ['consumo_interno', 'merma'])
     .gte('created_at', fromTs)
     .lte('created_at', toTs)
@@ -2643,25 +2620,21 @@ async function getBiometricSettings() {
   return { enabled, model };
 }
 
-// Guarda la plantilla de huella de un empleado. employees ya acepta
-// .update() directo (mismo patrón que updateEmployee), sin RPC. Si las
-// columnas fingerprint_template/fingerprint_enrolled todavía no existen
-// (falta correr la migración 20260818000000_biometric_fingerprint.sql) esto
-// lanza un error claro en vez de romper el resto de la app.
 async function saveFingerprint(employeeId, template) {
-  const { error } = await supabase
-    .from('employees')
-    .update({ fingerprint_template: template, fingerprint_enrolled: true })
-    .eq('id', employeeId);
+  const { error } = await supabase.rpc('save_fingerprint', {
+    p_branch_id: getCurrentBranchId(),
+    p_employee_id: employeeId,
+    p_template: template
+  });
   must(error, 'No se pudo guardar la huella del empleado');
   return true;
 }
 
 async function clearFingerprint(employeeId) {
-  const { error } = await supabase
-    .from('employees')
-    .update({ fingerprint_template: null, fingerprint_enrolled: false })
-    .eq('id', employeeId);
+  const { error } = await supabase.rpc('clear_fingerprint', {
+    p_branch_id: getCurrentBranchId(),
+    p_employee_id: employeeId
+  });
   must(error, 'No se pudo borrar la huella del empleado');
   return true;
 }
@@ -2671,6 +2644,8 @@ module.exports = {
   hashPassword,
   makeCredentials,
   getCurrentBranchId,
+  setCurrentBranchId,
+  getAllBranches,
   subscribeToNewSales,
   // auth / cuentas
   login,

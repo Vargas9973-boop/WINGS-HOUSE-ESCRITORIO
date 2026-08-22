@@ -60,6 +60,58 @@ async function writeKdsConfig(cfg) {
 }
 
 // ==========================================================================
+// SUCURSAL — igual que kds-config.json: config LOCAL por instalación (esta
+// terminal física vive en un local concreto), no una fila de `settings`.
+// Reemplaza el antiguo DEFAULT_BRANCH_ID=1 hardcodeado de db.js -- ver
+// Opción A / Tarea 3 del reporte de auditoría multi-sucursal.
+// ==========================================================================
+function getBranchConfigPath() {
+  return path.join(app.getPath('userData'), 'branch-config.json');
+}
+
+async function readBranchConfig() {
+  try {
+    return JSON.parse(await fs.promises.readFile(getBranchConfigPath(), 'utf8'));
+  } catch (err) {
+    return null; // primer arranque: no existe el archivo todavía
+  }
+}
+
+async function writeBranchConfig(cfg) {
+  await fs.promises.writeFile(getBranchConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
+}
+
+// Resuelve qué sucursal es esta instalación, SIN caer nunca en silencio a
+// una constante. Tres casos:
+//   1. Ya hay branch-config.json -> se usa tal cual.
+//   2. No hay config pero en Supabase existe EXACTAMENTE una sucursal ->
+//      bootstrap automático (así la instalación que ya está en producción
+//      arranca sin pasos manuales la primera vez que corra esta versión).
+//   3. No hay config y hay 0 o más de una sucursal -> no se puede adivinar;
+//      se detiene el arranque con un diálogo claro en vez de vender/cobrar
+//      con el branch equivocado.
+async function resolveBranchId() {
+  const existing = await readBranchConfig();
+  if (existing && existing.branchId) return existing.branchId;
+
+  const branches = await db.getAllBranches();
+  if (branches.length === 1) {
+    const branchId = branches[0].id;
+    await writeBranchConfig({ branchId, branchName: branches[0].name });
+    console.log(`Sucursal configurada automáticamente: ${branches[0].name} (id ${branchId}).`);
+    return branchId;
+  }
+
+  throw new Error(
+    branches.length === 0
+      ? 'No hay ninguna sucursal dada de alta en Supabase (tabla branches).'
+      : `Hay ${branches.length} sucursales en Supabase y esta instalación no tiene branch-config.json -- ` +
+        'no se puede adivinar cuál le corresponde. Configúrala a mano (falta UI en Ajustes; ' +
+        `por ahora, crea "${getBranchConfigPath()}" con { "branchId": <id> }).`
+  );
+}
+
+// ==========================================================================
 // ALERTA DE COCINA — comandas nuevas por Realtime (ver sección más abajo)
 // ==========================================================================
 // IDs de "sales" que ESTA instalación acaba de crear (mesa abierta o venta
@@ -379,6 +431,19 @@ function registerGlobalShortcuts() {
 }
 
 app.whenReady().then(async () => {
+  try {
+    const branchId = await resolveBranchId();
+    db.setCurrentBranchId(branchId);
+  } catch (err) {
+    console.error('No se pudo resolver la sucursal de esta instalación:', err.message);
+    dialog.showErrorBox(
+      'No se pudo determinar la sucursal',
+      `${err.message}\n\nLa aplicación no puede continuar sin esto (evita vender/cobrar en la sucursal equivocada).`
+    );
+    app.quit();
+    return;
+  }
+
   try {
     await db.init(); // siembra las cuentas por defecto en Supabase si hace falta
   } catch (err) {

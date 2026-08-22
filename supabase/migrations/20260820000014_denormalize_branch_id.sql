@@ -1,0 +1,35 @@
+-- Opción A -- pedido del usuario 2026-08-20: en vez de acotar sale_items/
+-- sale_item_modifiers/product_modifier_groups/recipes por sucursal vía JOIN
+-- (como hacían 20260820025000/20260820000013), agregarles su propia columna
+-- branch_id y filtrar directo. Verificado en vivo antes de escribir esto
+-- (POST/GET reales contra .../rest/v1/... con la anon key real del
+-- proyecto, mismo método que ya validó otros hallazgos de esta sesión):
+--   - branches.id es bigint (fila real: {"id":1,"name":"Marina Nacional"}),
+--     NO uuid -- el pedido original decía
+--     "branch_id uuid REFERENCES branches(id)", corregido a bigint aquí.
+--   - sale_items, sale_item_modifiers, product_modifier_groups, recipes:
+--     confirmado que NINGUNA tiene columna branch_id (42703 "column ...
+--     does not exist" en las 4).
+--   - product_components SÍ ya tiene branch_id (200 OK, columna existe) --
+--     se agregó en 20260820000011 (ALTER TABLE ... ADD COLUMN IF NOT
+--     EXISTS branch_id bigint, nullable, sin FK). No hace falta agregarla
+--     de nuevo; este archivo solo la backfillea (por si acaso) y le agrega
+--     la FK a branches que le faltaba.
+--
+-- Los INSERT existentes a sale_items/sale_item_modifiers viven en ~17
+-- funciones ya escritas en 20260820020000_rpc_branch_id_core_sales.sql
+-- (process_sale, comanda_add_item, comanda_add_item_with_modifiers,
+-- set_sale_item_notes_and_modifiers, etc.) -- reescribir las 17 para que
+-- llenen branch_id a mano está fuera de alcance de este archivo. En vez de
+-- eso, dos triggers BEFORE INSERT lo derivan solos de la fila padre (mismo
+-- patrón que ya usa este repo: sale_item_modifiers_apply_inventory,
+-- trg_sale_items_apply_recipe_inventory) -- ninguna de esas 17 funciones
+-- necesita tocarse.
+-- product_modifier_groups/recipes SÍ se editan directo aquí (solo tienen 1
+-- función de escritura cada una: set_product_modifier_group/
+-- set_recipes_for_product, ambas reescritas abajo con branch_id explícito
+-- en el INSERT -- no hace falta trigger).
+
+-- ==========================================================================
+-- 1. sale_items -- columna + backfill + trigger
+-- ==========================================================================
