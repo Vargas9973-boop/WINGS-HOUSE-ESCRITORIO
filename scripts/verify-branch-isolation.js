@@ -18,9 +18,7 @@
 //     lo reporta como ⚠️  ESPERADO, no como falla.
 
 const { createClient } = require('@supabase/supabase-js');
-
-const SUPABASE_URL = 'https://acvsmyvijzqredqmoxti.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_2p9rJ5x8CQWrC-yIlu99mw_Gn2ZsHl9';
+const { SUPABASE_URL, SUPABASE_ANON_KEY } = require('../supabaseConfig');
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { realtime: { transport: require('ws') } });
 
 const TEST_BRANCH_NAME = '__TEST_ISOLATION_BORRAR__';
