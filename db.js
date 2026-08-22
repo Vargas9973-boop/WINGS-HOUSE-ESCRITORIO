@@ -2103,16 +2103,24 @@ async function removeEmployee(id) {
   return data;
 }
 
-function localDateStr(d = new Date()) {
-  return d.toISOString().slice(0, 10);
-}
-
+// NO redeclarar localDateStr aquí -- ya existe arriba (línea ~65, hora
+// local, usada por getWeekRange/isoMondayOf). Hasta 2026-08-22 hubo una
+// SEGUNDA función con el mismo nombre justo aquí, implementada con
+// `d.toISOString().slice(0,10)` (UTC, no local) -- al ser dos declaraciones
+// `function` con el mismo nombre en el mismo scope de módulo, la segunda
+// pisaba silenciosamente a la primera para TODO el archivo, incluidas las
+// llamadas de getPayrollData/getPayrollDetail (líneas ~2322/2444) que
+// convierten cada timestamp de asistencia a "qué día fue" para calcular
+// faltas: cualquier checada después de ~6pm hora local (turno de cierre)
+// se archivaba bajo el día SIGUIENTE en UTC, marcando al empleado como
+// "falta" el día que sí trabajó y "presente" un día que no. Bug real de
+// nómina, no solo de Asistencia -- corregido eliminando el duplicado.
 async function getTodayAttendance() {
-  const today = localDateStr();
+  const today = localDateStr(new Date());
   const { data, error } = await supabase
     .from('attendance').select('*')
     .eq('branch_id', getCurrentBranchId())
-    .gte('timestamp', `${today}T00:00:00`).lte('timestamp', `${today}T23:59:59.999`)
+    .gte('timestamp', localDayStartUtcIso(today)).lte('timestamp', localDayEndUtcIso(today))
     .order('timestamp', { ascending: false });
   must(error, 'No se pudo obtener la asistencia de hoy');
   return data;
@@ -2120,17 +2128,28 @@ async function getTodayAttendance() {
 
 async function getAllAttendance(filters = {}) {
   let query = supabase.from('attendance').select('*').eq('branch_id', getCurrentBranchId());
-  if (filters.dateFrom) query = query.gte('timestamp', `${filters.dateFrom}T00:00:00`);
-  if (filters.dateTo) query = query.lte('timestamp', `${filters.dateTo}T23:59:59.999`);
+  if (filters.dateFrom) query = query.gte('timestamp', localDayStartUtcIso(filters.dateFrom));
+  if (filters.dateTo) query = query.lte('timestamp', localDayEndUtcIso(filters.dateTo));
   query = query.order('timestamp', { ascending: false });
   const { data, error } = await query;
   must(error, 'No se pudo obtener la asistencia');
   return data;
 }
 
-// PENDIENTE: register_attendance todavía no recibe p_branch_id -- RPC "caja
-// negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql.
+// register_attendance sigue siendo un RPC "caja negra" (no versionado en
+// este repo, ver 20260820060000_tmp_introspect_pending_rpcs.sql) que NO
+// recibe p_branch_id -- no se reescribe a ciegas (regla del proyecto: no
+// tocar RPC sin ver su definición real primero). Mientras tanto, esta
+// validación de sucursal se hace aquí del lado del cliente: sin esto,
+// nada impedía registrar asistencia para un employeeId de otra sucursal
+// si algo (bug futuro, llamada directa) mandara uno que no viniera ya del
+// selector de empleados (que sí está filtrado por sucursal).
 async function registerAttendance(employeeId) {
+  const { data: emp, error: empErr } = await supabase
+    .from('employees').select('id').eq('id', employeeId).eq('branch_id', getCurrentBranchId()).maybeSingle();
+  must(empErr, 'No se pudo verificar el empleado');
+  if (!emp) throw new Error('El empleado no existe o no pertenece a esta sucursal.');
+
   const { data, error } = await supabase.rpc('register_attendance', { p_employee_id: employeeId });
   must(error, 'No se pudo registrar la asistencia');
   return data;
