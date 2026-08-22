@@ -606,8 +606,9 @@ function registerIpcHandlers() {
     return currentSession;
   });
 
-  safeHandle('auth:logout', () => {
+  safeHandle('auth:logout', async () => {
     currentSession = null;
+    await db.logout();
     return true;
   });
 

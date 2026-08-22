@@ -151,55 +151,72 @@ async function init() {
 // ==========================================================================
 // 1. AUTENTICACIÓN Y CUENTAS
 // ==========================================================================
+// login() ya no verifica el password ni lee password_hash/salt del lado del
+// cliente -- eso ahora vive en la Edge Function `login`
+// (supabase/functions/login), server-side, junto al service_role. Esta
+// función manda username+password+branchId (cada instalación de escritorio
+// sirve UNA sucursal fija, ver setCurrentBranchId), y si la Edge Function
+// confirma que son válidos, establece la sesión real que devuelve
+// (auth.setSession) para que de ahí en adelante supabase.auth.uid() sea
+// real en cada request -- prerequisito para que RLS deje de ser
+// USING (true). El mismo scrypt+sal de siempre sigue siendo la fuente de
+// verdad de las contraseñas; nada de eso cambió, solo dónde se compara.
+async function invokeLoginFunction(body) {
+  return supabase.functions.invoke('login', { body });
+}
+
+// La Edge Function ocasionalmente falla en el primer intento después de
+// estar inactiva (cold start) y siempre funciona al reintentar de inmediato
+// -- verificado repetidas veces en pruebas. Solo se reintenta una vez, y
+// solo si NO es un 401 (contraseña/usuario incorrectos es un resultado
+// determinístico, reintentarlo no cambia nada).
 async function login(username, password) {
   const cleanUsername = String(username || '').trim().toLowerCase();
+  const body = {
+    identifier: cleanUsername,
+    password: password || '',
+    branchId: getCurrentBranchId()
+  };
 
-  const { data: user, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('username', cleanUsername)
-    .eq('branch_id', getCurrentBranchId())
-    .eq('active', true)
-    .maybeSingle();
-
-  must(error, 'Error al consultar el usuario en Supabase');
-  if (!user) throw new Error('Usuario o contraseña incorrectos.');
-
-  if (user.password_hash && user.password_salt) {
-    const hash = hashPassword(password || '', user.password_salt);
-    if (hash !== user.password_hash) {
-      throw new Error('Usuario o contraseña incorrectos.');
-    }
-  } else if (typeof user.password === 'string') {
-    if (user.password !== String(password || '')) {
-      throw new Error('Usuario o contraseña incorrectos.');
-    }
-
-    const { salt, hash } = makeCredentials(password || '');
-    const { error: migrateErr } = await supabase
-      .from('users')
-      .update({ password_hash: hash, password_salt: salt })
-      .eq('id', user.id);
-
-    must(migrateErr, 'No se pudo actualizar la contraseña del usuario');
-  } else {
-    throw new Error('La cuenta no tiene una contraseña configurada correctamente.');
+  let { data, error } = await invokeLoginFunction(body);
+  if (error && error.context && error.context.status !== 401) {
+    ({ data, error } = await invokeLoginFunction(body));
   }
 
-  // Permisos por módulo (Cuentas -> Roles): si el usuario no tiene role_id
-  // (instalación previa a esta función, o el rol se borró) la RPC devuelve
-  // vacío -- no rompe el login, hasPermission() cae al criterio viejo
-  // (role === 'admin') cuando el arreglo de permisos viene vacío.
-  const permissions = await getUserPermissions(user.id);
+  if (error) {
+    // FunctionsHttpError trae el body de la respuesta (401/500) en
+    // error.context -- si no se puede leer, cae al mensaje genérico de
+    // siempre para no filtrar detalles internos.
+    let serverMsg = null;
+    try {
+      const respBody = await error.context.json();
+      serverMsg = respBody && respBody.error;
+    } catch (_) {}
+    throw new Error(serverMsg || 'Usuario o contraseña incorrectos.');
+  }
+  if (!data || !data.session || !data.profile) {
+    throw new Error('No se pudo iniciar sesión.');
+  }
+
+  const { error: sessionErr } = await supabase.auth.setSession({
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token
+  });
+  must(sessionErr, 'No se pudo establecer la sesión');
 
   return {
-    id: user.id,
-    username: user.username,
-    displayName: user.name,
-    role: user.role,
-    roleId: user.role_id || null,
-    permissions
+    id: data.profile.id,
+    username: data.profile.username,
+    displayName: data.profile.displayName,
+    role: data.profile.role,
+    roleId: data.profile.roleId,
+    permissions: data.profile.permissions || []
   };
+}
+
+async function logout() {
+  await supabase.auth.signOut();
+  return true;
 }
 
 // Devuelve [] en vez de tronar si la RPC falla (rol borrado, instalación
@@ -3013,6 +3030,7 @@ module.exports = {
   subscribeToNewSales,
   // auth / cuentas
   login,
+  logout,
   changePassword,
   getAllUsers,
   createUser,

@@ -13,8 +13,13 @@
 // con la sesión real, auth.uid()/auth.role() resuelven correctamente vía
 // PostgREST, y un JWT con firma alterada es rechazado con 401 antes de
 // llegar a Postgres. Las políticas de RLS siguen en USING (true) todavía
-// -- no usan auth.uid()/auth.jwt() -- y db.js / wing-house-web/Login.jsx
-// TODAVÍA NO llaman esta función. Eso es el siguiente paso.
+// -- no usan auth.uid()/auth.jwt(). Ahora conectada a db.js (desktop,
+// busca por username + exige branchId de la instalación) y a
+// wing-house-web/Login.jsx (busca por email, sin restricción de sucursal
+// -- mismo comportamiento que tenían ambos logins antes de esta función).
+//
+// `identifier` se compara contra username Y contra email (case-insensitive)
+// -- una sola función sirve a los dos flujos sin necesitar dos endpoints.
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
@@ -63,24 +68,52 @@ Deno.serve(async (req) => {
   });
 
   try {
-    const { username, password } = await req.json();
-    if (!username || !password) {
-      return json({ error: "username y password son requeridos" }, 400);
+    const { identifier, password, branchId } = await req.json();
+    if (!identifier || !password) {
+      return json({ error: "identifier y password son requeridos" }, 400);
     }
-    const cleanUsername = String(username).trim().toLowerCase();
+    const cleanIdentifier = String(identifier).trim().toLowerCase();
 
-    const { data: user, error: userErr } = await admin
-      .from("users")
-      .select("*")
-      .eq("username", cleanUsername)
-      .eq("active", true)
-      .maybeSingle();
-
-    if (userErr) {
-      console.error("Error consultando users:", userErr.message);
-      return json({ error: "Error al consultar el usuario" }, 500);
+    // username o email, lo que haya mandado el cliente -- desktop manda su
+    // username, la web manda el email del empleado. Dos queries con .eq()
+    // parametrizado en vez de un solo .or() con el string interpolado --
+    // .or() de PostgREST no escapa comas/paréntesis en el valor, así que
+    // interpolar identifier ahí abriría un hueco de filter injection.
+    let user = null;
+    {
+      const { data, error: userErr } = await admin
+        .from("users")
+        .select("*")
+        .eq("username", cleanIdentifier)
+        .eq("active", true)
+        .maybeSingle();
+      if (userErr) {
+        console.error("Error consultando users por username:", userErr.message);
+        return json({ error: "Error al consultar el usuario" }, 500);
+      }
+      user = data;
+    }
+    if (!user) {
+      const { data, error: userErr } = await admin
+        .from("users")
+        .select("*")
+        .eq("email", cleanIdentifier)
+        .eq("active", true)
+        .maybeSingle();
+      if (userErr) {
+        console.error("Error consultando users por email:", userErr.message);
+        return json({ error: "Error al consultar el usuario" }, 500);
+      }
+      user = data;
     }
     if (!user || !user.password_hash || !user.password_salt) {
+      return json({ error: "Usuario o contraseña incorrectos." }, 401);
+    }
+
+    // El desktop manda branchId (cada instalación sirve UNA sucursal fija)
+    // -- si el usuario existe pero es de otra sucursal, mismo error
+    // genérico que "no existe" para no filtrar en qué sucursal sí está.
+    if (branchId != null && Number(user.branch_id) !== Number(branchId)) {
       return json({ error: "Usuario o contraseña incorrectos." }, 401);
     }
 
@@ -146,6 +179,7 @@ Deno.serve(async (req) => {
       profile: {
         id: user.id,
         username: user.username,
+        email,
         displayName: user.name,
         role: user.role,
         roleId: user.role_id || null,

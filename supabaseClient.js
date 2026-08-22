@@ -8,7 +8,11 @@ const supabase = createClient(
     {
         auth: {
             persistSession: false,
-            autoRefreshToken: false,
+            // true desde que db.js.login() establece una sesión real (ver
+            // supabase/functions/login) -- sin esto, el access_token expira
+            // a la hora (default de Supabase) y las llamadas siguientes
+            // quedan silenciosamente como anon en vez de authenticated.
+            autoRefreshToken: true,
             detectSessionInUrl: false
         },
 
