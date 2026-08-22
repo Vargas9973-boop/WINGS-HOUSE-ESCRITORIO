@@ -20,7 +20,7 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "electron": "^31.3.1",
+    "electron": "^43.4.1",
     "electron-builder": "^26.15.3"
   },
   "build": {
