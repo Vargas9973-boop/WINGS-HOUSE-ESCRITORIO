@@ -521,7 +521,8 @@ async function createSale(payload, openedBy, cashierId) {
         reason: 'Excedente crédito nómina - venta empleado',
         status: 'pendiente',
         week_start: start,
-        week_end: end
+        week_end: end,
+        branch_id: getCurrentBranchId()
       }]);
       if (dedErr) console.error('No se pudo registrar la deducción de nómina:', dedErr.message);
     } catch (err) {
@@ -2303,8 +2304,9 @@ async function getPayrollData(weekStart, weekEnd) {
   const { data: attendance, error: attErr } = await supabase
     .from('attendance')
     .select('employee_id, timestamp')
-    .gte('timestamp', `${weekStart}T00:00:00`)
-    .lte('timestamp', `${weekEnd}T23:59:59.999`);
+    .eq('branch_id', getCurrentBranchId())
+    .gte('timestamp', localDayStartUtcIso(weekStart))
+    .lte('timestamp', localDayEndUtcIso(weekEnd));
   must(attErr, 'No se pudo obtener la asistencia de la semana');
 
   // Mientras un empleado no tenga NINGÚN registro histórico de asistencia,
@@ -2324,8 +2326,8 @@ async function getPayrollData(weekStart, weekEnd) {
     .eq('client_type', 'employee')
     .eq('status', 'completada')
     .eq('branch_id', getCurrentBranchId())
-    .gte('created_at', `${weekStart}T00:00:00`)
-    .lte('created_at', `${weekEnd}T23:59:59.999`);
+    .gte('created_at', localDayStartUtcIso(weekStart))
+    .lte('created_at', localDayEndUtcIso(weekEnd));
   must(consErr, 'No se pudo obtener el beneficio de empleados de la semana');
 
   const bonusByEmployee = {};
@@ -2411,9 +2413,10 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
     .from('payroll_deductions')
     .select('*')
     .eq('employee_name', employeeName)
+    .eq('branch_id', getCurrentBranchId())
     .eq('status', 'pendiente')
-    .gte('created_at', `${weekStart}T00:00:00`)
-    .lte('created_at', `${weekEnd}T23:59:59.999`)
+    .gte('created_at', localDayStartUtcIso(weekStart))
+    .lte('created_at', localDayEndUtcIso(weekEnd))
     .order('created_at', { ascending: false });
   must(credErr, 'No se pudieron obtener los créditos del empleado');
 
@@ -2429,8 +2432,8 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
       .eq('employee_id', employee.id)
       .eq('client_type', 'employee')
       .eq('status', 'completada')
-      .gte('created_at', `${weekStart}T00:00:00`)
-      .lte('created_at', `${weekEnd}T23:59:59.999`)
+      .gte('created_at', localDayStartUtcIso(weekStart))
+      .lte('created_at', localDayEndUtcIso(weekEnd))
       .order('created_at', { ascending: false });
     must(ventasErr, 'No se pudo obtener el beneficio de empleado del empleado');
     beneficio = (ventas || [])
@@ -2446,15 +2449,17 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
     const { count: historyCount, error: histErr } = await supabase
       .from('attendance')
       .select('id', { count: 'exact', head: true })
-      .eq('employee_id', employee.id);
+      .eq('employee_id', employee.id)
+      .eq('branch_id', getCurrentBranchId());
     must(histErr);
 
     const { data: attendance, error: attErr } = await supabase
       .from('attendance')
       .select('timestamp')
       .eq('employee_id', employee.id)
-      .gte('timestamp', `${weekStart}T00:00:00`)
-      .lte('timestamp', `${weekEnd}T23:59:59.999`);
+      .eq('branch_id', getCurrentBranchId())
+      .gte('timestamp', localDayStartUtcIso(weekStart))
+      .lte('timestamp', localDayEndUtcIso(weekEnd));
     must(attErr);
     const diasAsistidos = historyCount > 0
       ? new Set((attendance || []).map((a) => localDateStr(new Date(a.timestamp))))
@@ -2495,7 +2500,8 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
     deduccion_faltas: r.deduccionFaltas,
     beneficio_usado: r.beneficioUsado,
     total_pagado: r.totalAPagar,
-    cerrado_por: closedBy || 'admin'
+    cerrado_por: closedBy || 'admin',
+    branch_id: getCurrentBranchId()
   }));
 
   if (snapshot.length > 0) {
@@ -2505,12 +2511,17 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
     must(histErr, 'No se pudo guardar el historial de nómina');
   }
 
+  // Sin el filtro de branch_id esto marcaba como 'descontado' las
+  // deducciones pendientes de CUALQUIER sucursal en el rango de fechas --
+  // cerrar la nómina de una sucursal habría liquidado también las
+  // deducciones de otra que ni siquiera hubiera cerrado todavía.
   const { error: updErr } = await supabase
     .from('payroll_deductions')
     .update({ status: 'descontado' })
     .eq('status', 'pendiente')
-    .gte('created_at', `${weekStart}T00:00:00`)
-    .lte('created_at', `${weekEnd}T23:59:59.999`);
+    .eq('branch_id', getCurrentBranchId())
+    .gte('created_at', localDayStartUtcIso(weekStart))
+    .lte('created_at', localDayEndUtcIso(weekEnd));
   must(updErr, 'No se pudo cerrar la nómina');
 
   return { closed: true, employees: snapshot.length };
