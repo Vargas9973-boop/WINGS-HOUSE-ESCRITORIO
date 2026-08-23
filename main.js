@@ -103,14 +103,23 @@ async function writeBranchConfig(cfg) {
 }
 
 // Resuelve qué sucursal es esta instalación, SIN caer nunca en silencio a
-// una constante. Tres casos:
+// una constante. Cuatro casos:
 //   1. Ya hay branch-config.json -> se usa tal cual.
 //   2. No hay config pero en Supabase existe EXACTAMENTE una sucursal ->
 //      bootstrap automático (así la instalación que ya está en producción
 //      arranca sin pasos manuales la primera vez que corra esta versión).
-//   3. No hay config y hay 0 o más de una sucursal -> no se puede adivinar;
-//      se detiene el arranque con un diálogo claro en vez de vender/cobrar
-//      con el branch equivocado.
+//   3. No hay config y hay MÁS de una sucursal -> ya no se puede adivinar
+//      mirando la lista sola (puede haber varios negocios/tenants, no solo
+//      varias sucursales del mismo) -- se devuelve null en vez de tronar:
+//      la app arranca igual, muestra el login normal, y auth:login (ver
+//      main.js) resuelve la sucursal real del primer login exitoso y la
+//      persiste, así que esta función solo se vuelve a necesitar una vez
+//      por instalación. Esto es lo que permite vender el mismo .exe
+//      genérico a cualquier cliente nuevo sin tocar nada a mano.
+//   4. No hay config y hay CERO sucursales -> no hay nada a lo que
+//      loguearse todavía (el tenant ni siquiera está dado de alta); esto
+//      sí detiene el arranque, es un problema de aprovisionamiento, no de
+//      ambigüedad.
 async function resolveBranchId() {
   const existing = await readBranchConfig();
   if (existing && existing.branchId) return existing.branchId;
@@ -123,13 +132,12 @@ async function resolveBranchId() {
     return branchId;
   }
 
-  throw new Error(
-    branches.length === 0
-      ? 'No hay ninguna sucursal dada de alta en Supabase (tabla branches).'
-      : `Hay ${branches.length} sucursales en Supabase y esta instalación no tiene branch-config.json -- ` +
-        'no se puede adivinar cuál le corresponde. Configúrala a mano (falta UI en Ajustes; ' +
-        `por ahora, crea "${getBranchConfigPath()}" con { "branchId": <id> }).`
-  );
+  if (branches.length === 0) {
+    throw new Error('No hay ninguna sucursal dada de alta en Supabase (tabla branches).');
+  }
+
+  console.log(`Hay ${branches.length} sucursales en Supabase -- la sucursal de esta instalación se resolverá con el primer login.`);
+  return null;
 }
 
 // ==========================================================================
@@ -516,15 +524,17 @@ function registerGlobalShortcuts() {
 app.whenReady().then(async () => {
   try {
     const branchId = await resolveBranchId();
-    db.setCurrentBranchId(branchId);
-
-    // Secreto de KDS (ver 20260822190000_kds_secret_hotfix.sql): mismo
-    // archivo que branchId, campo opcional -- instalaciones sin TV de
-    // cocina sin login no lo necesitan. Se instala a mano (por ahora,
-    // sin UI): agregar "kdsSecret" a branch-config.json con el valor que
-    // devuelve get_branch_kds_secret(branchId) ya logueado como admin.
-    const branchConfig = await readBranchConfig();
-    db.setCurrentKdsSecret(branchConfig && branchConfig.kdsSecret);
+    if (branchId) {
+      db.setCurrentBranchId(branchId);
+      // Secreto de KDS (ver 20260822190000_kds_secret_hotfix.sql): mismo
+      // archivo que branchId, campo opcional -- instalaciones sin TV de
+      // cocina sin login no lo necesitan.
+      const branchConfig = await readBranchConfig();
+      db.setCurrentKdsSecret(branchConfig && branchConfig.kdsSecret);
+    }
+    // branchId null (más de una sucursal en Supabase, instalación nueva sin
+    // config todavía) NO es un error -- se sigue arrancando igual, y
+    // auth:login (más abajo) termina de resolverlo con el primer login real.
   } catch (err) {
     console.error('No se pudo resolver la sucursal de esta instalación:', err.message);
     dialog.showErrorBox(
@@ -540,24 +550,34 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('Error al inicializar Supabase:', err);
   }
-  db.subscribeToNewSales(handleIncomingSale, (connected) => {
-    isRealtimeConnected = connected;
-    broadcastRealtimeStatus();
-  });
-  db.subscribeToKdsChanges(() => refreshKdsWindow());
+  // Ambas dependen de saber ya la sucursal (arman su filtro de Realtime con
+  // getCurrentBranchId(), que truena si no está configurada) -- si esta
+  // instalación todavía no la sabe (ver arriba), auth:login las arranca en
+  // cuanto el primer login la resuelva.
+  if (db.getCurrentBranchIdOrNull()) {
+    db.subscribeToNewSales(handleIncomingSale, (connected) => {
+      isRealtimeConnected = connected;
+      broadcastRealtimeStatus();
+    });
+    db.subscribeToKdsChanges(() => refreshKdsWindow());
+  }
   registerIpcHandlers();
   createWindow();
   buildAppMenu();
   registerGlobalShortcuts();
-  refreshAppIcon(); // best-effort, no bloquea el arranque si falla
+  // best-effort, no bloquea el arranque si falla -- necesita saber ya la
+  // sucursal (db.getBranding() usa getCurrentBranchId()), así que se salta
+  // si todavía no se resolvió (ver guardas de arriba); se refresca sola
+  // después vía settings:refreshBranding tras el primer login.
+  if (db.getCurrentBranchIdOrNull()) refreshAppIcon();
 
   // Autoarranque del KDS en la TV: solo si esta PC lo tiene configurado
-  // (kds-config.json, por defecto true) y de verdad hay una segunda
-  // pantalla conectada -- si no, no tiene sentido abrir una ventana extra
-  // encima de la principal.
+  // (kds-config.json, por defecto true), de verdad hay una segunda
+  // pantalla conectada, y ya se sabe la sucursal (si no, se abre sola en
+  // el siguiente arranque normal, una vez que el primer login la resuelva).
   const { screen } = require('electron');
   const kdsConfig = await readKdsConfig();
-  if (kdsConfig.kdsAutoStart === true && screen.getAllDisplays().length > 1) {
+  if (db.getCurrentBranchIdOrNull() && kdsConfig.kdsAutoStart === true && screen.getAllDisplays().length > 1) {
     createKDSWindow();
   }
 
@@ -695,6 +715,32 @@ function registerIpcHandlers() {
   safeHandle('auth:login', async (username, password) => {
     const session = await db.login(username, password);
     currentSession = session;
+
+    // Instalación nueva cuyo branch-config.json no traía branchId todavía
+    // (ver resolveBranchId()/app.whenReady() -- pasa cuando ya hay más de
+    // una sucursal en Supabase y no se podía adivinar cuál le tocaba a esta
+    // instalación). Ahora sí se sabe con certeza: viene del login real
+    // (session.branchId, la Edge Function lo lee de users.branch_id), no de
+    // una lista adivinada. Se fija y se persiste para que el próximo
+    // arranque ya no dependa de loguearse primero, y se arrancan las
+    // suscripciones Realtime que se saltaron en el arranque por no saber
+    // todavía a qué sucursal filtrar.
+    if (!db.getCurrentBranchIdOrNull() && session.branchId) {
+      db.setCurrentBranchId(session.branchId);
+      try {
+        const cfg = (await readBranchConfig()) || {};
+        const branches = await db.getAllBranches();
+        const branch = branches.find((b) => b.id === session.branchId);
+        await writeBranchConfig({ ...cfg, branchId: session.branchId, branchName: branch ? branch.name : undefined });
+      } catch (err) {
+        console.error('No se pudo persistir la sucursal resuelta por el login:', err.message);
+      }
+      db.subscribeToNewSales(handleIncomingSale, (connected) => {
+        isRealtimeConnected = connected;
+        broadcastRealtimeStatus();
+      });
+      db.subscribeToKdsChanges(() => refreshKdsWindow());
+    }
 
     // Onboarding del secreto de KDS (ver 20260822190000_kds_secret_hotfix.sql
     // y db.js::fetchBranchKdsSecret): ya hay sesión real de Supabase Auth

@@ -51,6 +51,15 @@ function getCurrentBranchId() {
   return _currentBranchId;
 }
 
+// Variante que no truena -- para el único punto legítimo donde "todavía no
+// se sabe" es un estado válido, no un error: el arranque de una instalación
+// nueva cuando ya existe más de una sucursal en Supabase (ver
+// resolveBranchId()/auth:login en main.js) y hace falta esperar al primer
+// login real para saber a cuál pertenece.
+function getCurrentBranchIdOrNull() {
+  return _currentBranchId;
+}
+
 // Secreto por sucursal para el único read que corre sin sesión (KDS "sin
 // login", ver 20260822190000_kds_secret_hotfix.sql) -- a diferencia de
 // branchId, es opcional: una instalación normal (con cajero logueado) no
@@ -207,10 +216,14 @@ async function invokeLoginFunction(body) {
 // determinístico, reintentarlo no cambia nada).
 async function login(username, password) {
   const cleanUsername = String(username || '').trim().toLowerCase();
+  // branchId puede ser null aquí (instalación nueva, sucursal todavía sin
+  // resolver -- ver resolveBranchId() en main.js): la Edge Function lo
+  // trata como opcional y valida por el usuario real de todas formas, así
+  // que un login sin branchId conocido de antemano es válido, no un bug.
   const body = {
     identifier: cleanUsername,
     password: password || '',
-    branchId: getCurrentBranchId()
+    branchId: getCurrentBranchIdOrNull()
   };
 
   let { data, error } = await invokeLoginFunction(body);
@@ -245,7 +258,11 @@ async function login(username, password) {
     displayName: data.profile.displayName,
     role: data.profile.role,
     roleId: data.profile.roleId,
-    permissions: data.profile.permissions || []
+    permissions: data.profile.permissions || [],
+    // Solo se usa en main.js cuando la sucursal todavía no se sabía al
+    // arrancar (branchId era null arriba) -- para una instalación ya
+    // configurada es simplemente el mismo id que ya se tenía.
+    branchId: data.profile.branchId
   };
 }
 
@@ -3099,6 +3116,7 @@ module.exports = {
   hashPassword,
   makeCredentials,
   getCurrentBranchId,
+  getCurrentBranchIdOrNull,
   setCurrentBranchId,
   getCurrentKdsSecret,
   setCurrentKdsSecret,
