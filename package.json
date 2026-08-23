@@ -11,7 +11,8 @@
     "build": "electron-builder",
     "test": "node --test tests/*.test.js",
     "test:mem": "node scripts/memory-leak-test.js",
-    "test:stability": "node scripts/stability-test.js"
+    "test:stability": "node scripts/stability-test.js",
+    "onboard": "node scripts/onboard-tenant.js"
   },
   "dependencies": {
     "@sentry/electron": "^7.17.0",
