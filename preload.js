@@ -1,3 +1,5 @@
+require('./sentryConfig').initRendererSentry();
+
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // Envuelve ipcRenderer.invoke y desempaqueta { ok, data, error }

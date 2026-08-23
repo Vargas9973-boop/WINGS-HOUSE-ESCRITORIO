@@ -3,6 +3,8 @@
 // IPC (kds:orders / kds:online), igual que preload.js hace para el resto de
 // la app -- así el KDS "sin login" tampoco expone nada sensible si alguien
 // desconecta la TV y la conecta a otra cosa.
+require('../sentryConfig').initRendererSentry();
+
 const { contextBridge, ipcRenderer } = require('electron');
 
 async function call(channel, ...args) {

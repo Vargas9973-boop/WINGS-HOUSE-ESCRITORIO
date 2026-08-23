@@ -7,9 +7,11 @@ const fs = require('fs');
 // configurado (SENTRY_DSN en .env/config.json, ver sentryConfig.js) no
 // hace nada -- una instalación sin monitoreo configurado sigue
 // funcionando exactamente igual que antes de esto. Cubre el proceso
-// PRINCIPAL (main.js/db.js, donde vive casi toda la lógica real) --
-// los procesos de renderer (preload.js, kds/, etc.) no están cubiertos
-// todavía, queda como trabajo aparte.
+// PRINCIPAL (main.js/db.js, donde vive casi toda la lógica real); los 5
+// procesos de renderer (preload.js, kds/kds-preload.js, report-preload.js,
+// history-print-preload.js, ticket-preload.js) se inicializan por su cuenta
+// vía sentryConfig.js::initRendererSentry(), mandando sus eventos por IPC a
+// este mismo proceso.
 const { SENTRY_DSN } = require('./sentryConfig');
 if (SENTRY_DSN) {
   const Sentry = require('@sentry/electron/main');

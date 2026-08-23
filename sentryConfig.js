@@ -35,4 +35,29 @@ const fileConfig = readConfigJson() || {};
 
 const SENTRY_DSN = process.env.SENTRY_DSN || fileConfig.sentryDsn || null;
 
-module.exports = { SENTRY_DSN };
+// Inicializa Sentry en un proceso de renderer (preload.js/kds-preload.js/
+// report-preload.js/history-print-preload.js/ticket-preload.js) -- estos
+// scripts corren con acceso a Node/ipcRenderer aunque contextIsolation esté
+// activo, así que @sentry/electron/renderer puede mandar los eventos por
+// IPC al proceso principal (ya inicializado en main.js) sin necesitar el
+// puente de contextBridge que hace falta cuando el bundle del renderer no
+// tiene acceso a Node. Cada ventana ejecuta su propio preload de cero en
+// cada `loadFile`/navegación, así que esto no duplica el init en un mismo
+// contexto. Sin DSN configurado, no hace nada -- mismo criterio que main.js.
+function initRendererSentry() {
+  if (!SENTRY_DSN) return;
+  let version = 'unknown';
+  try {
+    version = require('./package.json').version;
+  } catch (_) {
+    // sin package.json accesible (no debería pasar): sigue sin romper nada.
+  }
+  const Sentry = require('@sentry/electron/renderer');
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    tracesSampleRate: 1.0,
+    release: `wings-house@${version}`
+  });
+}
+
+module.exports = { SENTRY_DSN, initRendererSentry };

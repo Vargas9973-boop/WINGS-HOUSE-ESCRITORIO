@@ -557,15 +557,16 @@ async function createSale(payload, openedBy, cashierId) {
     try {
       const payrollSettings = await getPayrollSettings();
       const { start, end } = getWeekRange(payrollSettings.dayNumber);
-      const { error: dedErr } = await supabase.from('payroll_deductions').insert([{
-        employee_name: data.employee_name,
-        amount: Number(data.credit_amount),
-        sale_id: data.id,
-        reason: 'Excedente crédito nómina - venta empleado',
-        status: 'pendiente',
-        week_start: start,
-        week_end: end
-      }]);
+      const { error: dedErr } = await supabase.rpc('create_payroll_deduction', {
+        p_branch_id: getCurrentBranchId(),
+        p_employee_name: data.employee_name,
+        p_amount: Number(data.credit_amount),
+        p_sale_id: data.id,
+        p_reason: 'Excedente crédito nómina - venta empleado',
+        p_status: 'pendiente',
+        p_week_start: start,
+        p_week_end: end
+      });
       if (dedErr) console.error('No se pudo registrar la deducción de nómina:', dedErr.message);
     } catch (err) {
       console.error('No se pudo registrar la deducción de nómina:', err.message);
@@ -1413,20 +1414,18 @@ async function updateKdsStatus(saleId, status) {
 // llamador (main.js) simplemente vuelve a pedir getKdsOrders() completo en
 // cada evento -- mismo patrón simple que subscribeToNewSales, sin intentar
 // aplicar parches incrementales del lado del cliente.
-// sale_items no tiene columna branch_id propia (hereda la sucursal de su
-// venta vía sale_id), así que postgres_changes no puede filtrarla del lado
-// del servidor -- Realtime solo filtra por columnas de la misma tabla. Con
-// esto, el evento de "se agregó un renglón" de otra sucursal SÍ llega a
-// este canal (aunque getKdsOrders(), ya filtrado por sucursal, ignore el
-// contenido y solo lo use como señal de "vuelve a pedir"). Queda
-// documentado como deuda -- ver auditoría A6 -- la solución completa es
-// desnormalizar branch_id a sale_items o mover este refresco a un canal
-// broadcast propio por sucursal.
+// sale_items ya tiene su propia columna branch_id (ver
+// 20260823130000_denormalize_branch_id_catchup.sql), así que postgres_changes
+// sí puede filtrarla del lado del servidor igual que 'sales'. sale_items no
+// está en la publicación supabase_realtime hoy (solo sales/comandas), así
+// que este segundo .on() no dispara nada en la práctica -- el filtro queda
+// puesto de todas formas para que, si algún día se agrega la tabla a la
+// publicación, no vuelva a filtrar cero eventos por sucursal.
 function subscribeToKdsChanges(onChange) {
   return supabase
     .channel('kds-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sales', filter: `branch_id=eq.${getCurrentBranchId()}` }, onChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items', filter: `branch_id=eq.${getCurrentBranchId()}` }, onChange)
     .subscribe();
 }
 
@@ -2370,6 +2369,7 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
   const { data: creditos, error: credErr } = await supabase
     .from('payroll_deductions')
     .select('*')
+    .eq('branch_id', getCurrentBranchId())
     .eq('employee_name', employeeName)
     .eq('status', 'pendiente')
     .gte('created_at', `${weekStart}T00:00:00`)
@@ -2459,18 +2459,18 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
   }));
 
   if (snapshot.length > 0) {
-    const { error: histErr } = await supabase
-      .from('payroll_history')
-      .upsert(snapshot, { onConflict: 'week_start,employee_id' });
+    const { error: histErr } = await supabase.rpc('upsert_payroll_history', {
+      p_branch_id: getCurrentBranchId(),
+      p_rows: snapshot
+    });
     must(histErr, 'No se pudo guardar el historial de nómina');
   }
 
-  const { error: updErr } = await supabase
-    .from('payroll_deductions')
-    .update({ status: 'descontado' })
-    .eq('status', 'pendiente')
-    .gte('created_at', `${weekStart}T00:00:00`)
-    .lte('created_at', `${weekEnd}T23:59:59.999`);
+  const { error: updErr } = await supabase.rpc('close_payroll_deductions', {
+    p_branch_id: getCurrentBranchId(),
+    p_from: `${weekStart}T00:00:00`,
+    p_to: `${weekEnd}T23:59:59.999`
+  });
   must(updErr, 'No se pudo cerrar la nómina');
 
   return { closed: true, employees: snapshot.length };
