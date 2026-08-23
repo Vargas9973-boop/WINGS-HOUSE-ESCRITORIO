@@ -3012,7 +3012,7 @@ async function uploadLogo(filePath, originalFileName) {
   const contentType = MIME_BY_EXT[ext];
   if (!contentType) throw new Error('Formato de imagen no soportado. Usa PNG, JPG o WEBP.');
 
-  const buffer = fs.readFileSync(filePath);
+  const buffer = await fs.promises.readFile(filePath);
   const storagePath = `${getCurrentBranchId()}/logo-${Date.now()}${ext}`;
 
   const { error: upErr } = await supabase.storage
