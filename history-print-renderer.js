@@ -31,11 +31,13 @@ function renderHistoryReport({ rows, kpis, filters, settings }) {
       </tr>`).join('')
     : `<tr><td colspan="6" class="empty">Sin movimientos en el periodo.</td></tr>`;
 
+  const businessName = settings.business_name || 'Wings House';
+
   root.innerHTML = `
     <div class="report-header">
-      <img src="logo.png" alt="logo">
+      <img src="${escapeHtml(settings.logo_url || 'logo.png')}" alt="logo">
       <div>
-        <h1>${escapeHtml(settings.business_name || 'Wings House')}</h1>
+        <h1>${escapeHtml(businessName)}</h1>
         <p>${escapeHtml(settings.business_address || '')} · Tel: ${escapeHtml(settings.business_phone || '')}</p>
       </div>
     </div>
@@ -59,7 +61,7 @@ function renderHistoryReport({ rows, kpis, filters, settings }) {
       <tbody>${bodyRows}</tbody>
     </table>
 
-    <div class="report-footer">Wings House — Historial generado automáticamente por el sistema administrativo.</div>
+    <div class="report-footer">${escapeHtml(businessName)} — Historial generado automáticamente por el sistema administrativo.</div>
   `;
 }
 

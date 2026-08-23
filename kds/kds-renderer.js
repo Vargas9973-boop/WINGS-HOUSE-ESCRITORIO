@@ -200,6 +200,22 @@ window.kdsAPI.onOnline((online) => {
   document.getElementById('offline').hidden = !!online;
 });
 
+// Branding empujado por main.js (ver pushKdsBranding()) -- este renderer no
+// tiene Supabase propio, así que no puede leer settings.logo_url/business_name
+// por su cuenta (ver comentario en el <head> de kds.html/kds-preload.js).
+window.kdsAPI.onBranding((branding) => {
+  if (!branding) return;
+  const logo = document.getElementById('kds-logo');
+  if (branding.logoUrl && logo) {
+    logo.src = branding.logoUrl;
+    logo.hidden = false;
+  }
+  const nameEl = document.getElementById('kds-brand-name');
+  if (branding.companyName && nameEl) nameEl.textContent = branding.companyName;
+  if (branding.primaryColor) document.documentElement.style.setProperty('--brand-orange', branding.primaryColor);
+  if (branding.secondaryColor) document.documentElement.style.setProperty('--brand-red', branding.secondaryColor);
+});
+
 setInterval(render, 1000); // recalcula timers (mm:ss) y clases over12/over18 en vivo
 setInterval(updateClock, 1000);
 updateClock();

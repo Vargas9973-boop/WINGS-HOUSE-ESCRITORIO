@@ -80,8 +80,13 @@ const BRAND_CACHE_KEY = 'wh_branding_cache';
 function applyBrandingValues(values) {
   if (!values) return;
   if (values.logoUrl) {
-    document.querySelectorAll('.header-logo, .login-logo, .ticket-logo, #app-logo').forEach((img) => {
+    document.querySelectorAll('.header-logo, .header-mini-logo, .login-logo, .modal-logo, .ticket-logo, #app-logo').forEach((img) => {
       img.src = values.logoUrl;
+    });
+  }
+  if (values.companyName) {
+    document.querySelectorAll('.brand-name').forEach((el) => {
+      el.textContent = values.companyName;
     });
   }
   if (values.primaryColor) document.documentElement.style.setProperty('--brand-orange', values.primaryColor);
@@ -121,9 +126,15 @@ async function loadAndApplyBranding() {
       }
     }
     if (!themeAuto) restoreDefaultTheme();
-    const values = { logoUrl: settings.logo_url || null, primaryColor, secondaryColor };
+    const values = {
+      logoUrl: settings.logo_url || null,
+      companyName: settings.business_name || 'Wings House',
+      primaryColor,
+      secondaryColor
+    };
     applyBrandingValues(values);
     localStorage.setItem(BRAND_CACHE_KEY, JSON.stringify(values));
+    if (values.companyName) document.title = document.title.replace(/Wings House/, values.companyName);
   } catch (err) {
     console.error('No se pudo cargar el logo/tema del negocio:', err);
   }

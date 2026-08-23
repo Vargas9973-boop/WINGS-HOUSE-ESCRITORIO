@@ -687,11 +687,11 @@ async function getEmployeeDailyConsumption(employeeId) {
     return 0;
   }
 
-  // Pendiente: get_employee_daily_consumption todavía no recibe
-  // p_branch_id (RPC "caja negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql).
-  // Mientras tanto, este select cierra la parte del hueco que sí se puede
-  // cerrar sin tocar ese RPC: confirmar aquí que el empleado es de esta
-  // sucursal antes de pedirle su consumo.
+  // get_employee_daily_consumption no recibe p_branch_id (no lo necesita --
+  // valida internamente que p_employee_id sea de current_branch_id(), ver
+  // 20260823120000_payroll_attendance_final_fix.sql). Este select se deja
+  // igual: dar un mensaje claro en el cliente antes de gastar el roundtrip
+  // del RPC si el empleado obviamente no es de esta sucursal.
   const { data: emp, error: empErr } = await supabase
     .from('employees').select('id').eq('id', Number(employeeId)).eq('branch_id', getCurrentBranchId()).maybeSingle();
   must(empErr, 'No se pudo verificar el empleado');
@@ -2022,14 +2022,16 @@ async function createEmployee(data) {
         active
     });
 
-    // PENDIENTE: create_employee todavía no recibe p_branch_id -- RPC "caja
-    // negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql. Agregar
-    // `p_branch_id: getCurrentBranchId()` aquí en cuanto exista 0009-parte-2
-    // (y employees.branch_id ya no dependa del DEFAULT -- ver
-    // 20260820900000_drop_branch_default_RUN_LAST.sql).
+    // create_employee ya exige p_branch_id del lado del servidor (RAISE si
+    // es NULL) desde antes de esta sesión -- este call nunca lo mandaba, así
+    // que crear un empleado estaba roto (PostgREST no resolvía la firma).
+    // Ver 20260823120000_payroll_attendance_final_fix.sql: además del fix
+    // aquí, el RPC pasa a validar branch_id contra la sesión real, no solo
+    // "no nulo".
     const { data: row, error } = await supabase.rpc(
         'create_employee',
         {
+            p_branch_id: getCurrentBranchId(),
             p_name: name,
             p_role: role,
             p_salary: salary,
@@ -2099,10 +2101,13 @@ async function getAllAttendance(filters = {}) {
   return data;
 }
 
-// PENDIENTE: register_attendance todavía no recibe p_branch_id -- RPC "caja
-// negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql.
+// register_attendance ya exige p_branch_id del lado del servidor -- este
+// call nunca lo mandaba (ver 20260823120000_payroll_attendance_final_fix.sql).
 async function registerAttendance(employeeId) {
-  const { data, error } = await supabase.rpc('register_attendance', { p_employee_id: employeeId });
+  const { data, error } = await supabase.rpc('register_attendance', {
+    p_branch_id: getCurrentBranchId(),
+    p_employee_id: employeeId
+  });
   must(error, 'No se pudo registrar la asistencia');
   return data;
 }
@@ -2118,7 +2123,7 @@ async function getPayrollWeek(weekStart) {
 
   const { data: creditRows, error: credErr } = await supabase.rpc(
     'get_payroll_week_credit',
-    { p_week_start: weekStart }
+    { p_branch_id: getCurrentBranchId(), p_week_start: weekStart }
   );
   must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
@@ -2173,8 +2178,11 @@ async function getPayrollDeductionsPendientes(weekStart) {
     }));
 }
 
+// set_payroll_bonus ya exige p_branch_id del lado del servidor -- este call
+// nunca lo mandaba (ver 20260823120000_payroll_attendance_final_fix.sql).
 async function setPayrollBonus(payload) {
   const { data, error } = await supabase.rpc('set_payroll_bonus', {
+    p_branch_id: getCurrentBranchId(),
     p_employee_id: payload.employeeId,
     p_week_start: payload.weekStart,
     p_bonus_credited: !!payload.bonusCredited
@@ -2248,7 +2256,7 @@ async function getPayrollData(weekStart, weekEnd) {
 
   const { data: creditRows, error: credErr } = await supabase.rpc(
     'get_payroll_week_credit',
-    { p_week_start: bonusWeekStart }
+    { p_branch_id: getCurrentBranchId(), p_week_start: bonusWeekStart }
   );
   must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
@@ -2668,6 +2676,32 @@ async function setSetting(key, value) {
   return true;
 }
 
+// Branding normalizado para ventanas sin acceso directo a Supabase (KDS,
+// "sin login" -- ver comentario en main.js línea ~36). Mismo shape que
+// applyBrandingValues() en common.js, para que kds-renderer.js reuse el
+// mismo campo companyName/logoUrl/primaryColor/secondaryColor.
+async function getBranding() {
+  const settings = await getAllSettings();
+  const themeAuto = settings.theme_auto === 'true';
+  let primaryColor = null;
+  let secondaryColor = null;
+  if (themeAuto && settings.theme_colors) {
+    try {
+      const parsed = JSON.parse(settings.theme_colors);
+      primaryColor = parsed.primary || null;
+      secondaryColor = parsed.secondary || null;
+    } catch {
+      // valor corrupto: se ignora, se queda en el color default
+    }
+  }
+  return {
+    companyName: settings.business_name || 'Wings House',
+    logoUrl: settings.logo_url || null,
+    primaryColor,
+    secondaryColor
+  };
+}
+
 // Lector de huella biométrico (Ajustes -> Asistencia/Biometría). Igual que
 // getPayrollSettings: un valor JSON guardado bajo una sola key de settings.
 // Default siempre deshabilitado -- si la key no existe (instalación previa
@@ -2837,6 +2871,7 @@ module.exports = {
   // ajustes
   getAllSettings,
   setSetting,
+  getBranding,
   // biometría
   getBiometricSettings,
   saveFingerprint,

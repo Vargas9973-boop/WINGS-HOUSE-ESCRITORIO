@@ -28,7 +28,7 @@
   },
   "build": {
     "appId": "com.wingshouse.escritorio",
-    "productName": "Wings House Admin",
+    "productName": "Sistema Sucursal",
     "icon": "build/icon.ico",
     "win": {
       "icon": "build/icon.ico",
@@ -36,7 +36,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "sucursal-setup.${ext}"
     },
     "extraResources": [
       {

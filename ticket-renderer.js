@@ -274,7 +274,7 @@ function renderTicket({ sale, settings }) {
     root.innerHTML = `
         <img
             class="logo"
-            src="logo.png"
+            src="${escapeHtml(settings.logo_url || 'logo.png')}"
             alt="logo"
         >
 

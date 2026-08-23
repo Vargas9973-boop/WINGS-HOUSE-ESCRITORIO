@@ -265,6 +265,7 @@ document.getElementById('set-logo-file').addEventListener('change', async (e) =>
     statusEl.textContent = 'Logo actualizado.';
     toast('Logo actualizado.', 'success');
     if (window.loadAndApplyBranding) window.loadAndApplyBranding();
+    window.db.settings.refreshBranding().catch((err) => console.error('No se pudo refrescar el branding del KDS:', err.message));
   } catch (err) {
     console.error('No se pudo subir el logo:', err);
     statusEl.textContent = 'No se pudo subir el logo.';
@@ -380,6 +381,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
 
     if (!themeAuto) restoreDefaultTheme();
     if (window.loadAndApplyBranding) await window.loadAndApplyBranding();
+    window.db.settings.refreshBranding().catch((err) => console.error('No se pudo refrescar el branding del KDS:', err.message));
 
     toast('Ajustes aplicados.', 'success');
   } catch (err) {

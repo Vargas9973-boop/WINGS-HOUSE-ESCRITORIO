@@ -32,6 +32,18 @@ body {
   letter-spacing: 0.03em;
 }
 
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+}
+
+.header-mini-logo {
+  height: 4vh;
+  width: auto;
+  object-fit: contain;
+}
+
 #clock {
   font-variant-numeric: tabular-nums;
   opacity: 0.85;

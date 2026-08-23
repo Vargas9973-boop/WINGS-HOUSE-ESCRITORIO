@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Notification, Menu, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, Menu, globalShortcut, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -292,6 +292,42 @@ async function refreshKdsWindow() {
   }
 }
 
+async function pushKdsBranding() {
+  if (!kdsWindow || kdsWindow.isDestroyed()) return;
+  try {
+    const branding = await db.getBranding();
+    kdsWindow.webContents.send('kds:branding', branding);
+  } catch (err) {
+    console.error('No se pudo enviar el branding al KDS:', err.message);
+  }
+}
+
+// Ícono de la ventana/taskbar: usa el logo subido en Ajustes si existe, si
+// no se queda con build/icon.ico (el que ya trae setIcon() en la creación
+// de la ventana). Best-effort -- si falla la descarga o el formato no es
+// válido, no rompe nada más, solo se queda con el ícono que ya había.
+async function refreshAppIcon() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const branding = await db.getBranding();
+    if (!branding.logoUrl) return;
+    const https = require('https');
+    const buffer = await new Promise((resolve, reject) => {
+      https.get(branding.logoUrl, (res) => {
+        if (res.statusCode !== 200) { reject(new Error(`status ${res.statusCode}`)); return; }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      }).on('error', reject);
+    });
+    const img = nativeImage.createFromBuffer(buffer);
+    if (img.isEmpty()) return;
+    mainWindow.setIcon(img);
+  } catch (err) {
+    console.error('No se pudo actualizar el ícono de la app:', err.message);
+  }
+}
+
 // Respaldo de polling para el KDS "sin login" (ver comentario en db.js
 // línea ~1417): supabase.subscribeToKdsChanges() usa Realtime sobre
 // `sales`, y Realtime respeta RLS -- desde
@@ -356,6 +392,7 @@ function createKDSWindow() {
   kdsWindow.loadFile('kds/kds.html');
   kdsWindow.webContents.on('did-finish-load', () => {
     refreshKdsWindow();
+    pushKdsBranding();
     kdsWindow.webContents.send('kds:online', isRealtimeConnected);
   });
   startKdsPolling();
@@ -510,6 +547,7 @@ app.whenReady().then(async () => {
   createWindow();
   buildAppMenu();
   registerGlobalShortcuts();
+  refreshAppIcon(); // best-effort, no bloquea el arranque si falla
 
   // Autoarranque del KDS en la TV: solo si esta PC lo tiene configurado
   // (kds-config.json, por defecto true) y de verdad hay una segunda
@@ -1013,6 +1051,16 @@ function registerIpcHandlers() {
   safeHandle('settings:getAll', () => db.getAllSettings());
   safeHandle('settings:set', (key, value) => db.setSetting(key, value));
   safeHandle('settings:uploadLogo', (filePath, fileName) => db.uploadLogo(filePath, fileName));
+  // Llamado por settings-renderer.js justo después de guardar/subir logo,
+  // igual que ya hace con window.loadAndApplyBranding() para el resto de la
+  // app -- el KDS no tiene Supabase propio (ver comentario "sin login" en
+  // este mismo archivo), así que su branding solo puede llegar empujada
+  // por IPC desde aquí.
+  safeHandle('settings:refreshBranding', async () => {
+    await pushKdsBranding();
+    await refreshAppIcon();
+    return true;
+  });
 
   // ------------------------------------------------------------------
   // EXPORTACIÓN DE REPORTES (CSV y reporte imprimible)

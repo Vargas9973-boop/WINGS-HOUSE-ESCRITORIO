@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.supabase.co;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KDS Cocina</title>
   <link rel="stylesheet" href="kds.css">
@@ -10,7 +10,10 @@
 <body>
   <div id="app">
     <div class="header">
-      <span>🔥 KDS COCINA — Wings House</span>
+      <span class="header-brand">
+        <img id="kds-logo" class="header-mini-logo" src="../logo.png" alt="Logo" hidden>
+        🔥 KDS COCINA — <span class="brand-name" id="kds-brand-name">Wings House</span>
+      </span>
       <span id="clock">--:--:--</span>
     </div>
     <div class="board">

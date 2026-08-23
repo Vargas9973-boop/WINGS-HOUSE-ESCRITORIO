@@ -27,11 +27,13 @@ function renderReport({ report, costsList, wasteList, settings }) {
     ? wasteList.map((w) => `<tr><td>${w.created_at}</td><td>${escapeHtml(w.item_name)}</td><td>${w.quantity} ${escapeHtml(w.unit)}</td><td>${escapeHtml(w.reason)}</td><td>${fmt(w.cost)}</td></tr>`).join('')
     : `<tr><td colspan="5" class="empty">Sin merma registrada en el periodo.</td></tr>`;
 
+  const businessName = settings.business_name || 'Wings House';
+
   root.innerHTML = `
     <div class="report-header">
-      <img src="logo.png" alt="logo">
+      <img src="${escapeHtml(settings.logo_url || 'logo.png')}" alt="logo">
       <div>
-        <h1>${escapeHtml(settings.business_name || 'Wings House')}</h1>
+        <h1>${escapeHtml(businessName)}</h1>
         <p>${escapeHtml(settings.business_address || '')} · Tel: ${escapeHtml(settings.business_phone || '')}</p>
       </div>
     </div>
@@ -60,7 +62,7 @@ function renderReport({ report, costsList, wasteList, settings }) {
     <h2 class="section-title">Merma del periodo</h2>
     <table><thead><tr><th>Fecha</th><th>Insumo</th><th>Cantidad</th><th>Motivo</th><th>Costo</th></tr></thead><tbody>${wasteRows}</tbody></table>
 
-    <div class="report-footer">Wings House — Reporte generado automáticamente por el sistema administrativo.</div>
+    <div class="report-footer">${escapeHtml(businessName)} — Reporte generado automáticamente por el sistema administrativo.</div>
   `;
 }
 

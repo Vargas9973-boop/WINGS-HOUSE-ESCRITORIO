@@ -15,6 +15,7 @@ async function call(channel, ...args) {
 contextBridge.exposeInMainWorld('kdsAPI', {
   onOrders: (cb) => ipcRenderer.on('kds:orders', (event, orders) => cb(orders)),
   onOnline: (cb) => ipcRenderer.on('kds:online', (event, online) => cb(online)),
+  onBranding: (cb) => ipcRenderer.on('kds:branding', (event, branding) => cb(branding)),
   cook: (saleId) => call('kds:updateStatus', saleId, 'en_preparacion'),
   markReady: (saleId) => call('kds:updateStatus', saleId, 'lista'),
   markDelivered: (saleId) => call('kds:updateStatus', saleId, 'entregada'),

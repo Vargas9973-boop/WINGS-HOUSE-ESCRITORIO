@@ -106,7 +106,8 @@ contextBridge.exposeInMainWorld('db', {
     // con contextIsolation) -- necesita correr aquí en preload, no en el
     // renderer aislado.
     getFilePath: (file) => webUtils.getPathForFile(file),
-    uploadLogo: (filePath, fileName) => call('settings:uploadLogo', filePath, fileName)
+    uploadLogo: (filePath, fileName) => call('settings:uploadLogo', filePath, fileName),
+    refreshBranding: () => call('settings:refreshBranding')
   },
   roles: {
     getAll: () => call('roles:getAll'),
