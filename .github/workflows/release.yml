@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # historia completa: sentry-cli necesita esto para asociar commits
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
@@ -29,3 +31,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Leer versión de package.json
+        id: pkg-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Crear release en Sentry y asociar commits
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: sistemas-computacionales
+          SENTRY_PROJECT: electron
+        with:
+          version: wings-house@${{ steps.pkg-version.outputs.version }}
+          finalize: true

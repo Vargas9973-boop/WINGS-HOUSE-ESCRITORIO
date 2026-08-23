@@ -245,6 +245,21 @@
         </div>
       </div>
 
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Diagnóstico</div>
+        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
+          Genera un error de prueba para verificar que el monitoreo (Sentry) está llegando.
+        </p>
+        <div class="form-grid">
+          <div class="field" style="align-self:end;">
+            <button id="btn-test-sentry" type="button" class="btn btn-outline">Probar Sentry</button>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <span id="sentry-test-result" class="status-indicator"></span>
+          </div>
+        </div>
+      </div>
+
       <div class="modal-actions" style="justify-content:flex-start; margin-top:22px;">
         <button id="btn-save-settings" class="btn btn-brand">Guardar ajustes</button>
       </div>

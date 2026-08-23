@@ -3,8 +3,6 @@
 // necesita main.js, para que el resto de la app (preload, renderers, html)
 // no tenga que cambiar absolutamente nada.
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const supabase = require('./supabaseClient');
 
 // ==========================================================================
@@ -114,16 +112,8 @@ function isoMondayOf(dateStr) {
 // El resto del catálogo/inventario/ajustes ya se siembra desde el script SQL
 // (supabase_schema.sql) porque no necesita hashing en Node.
 // ==========================================================================
-// users_table_row_count / seed_default_user (RPC, SECURITY DEFINER) --
-// esto corre en CADA arranque, antes de cualquier login (ver init() más
-// abajo), así que va siempre como anon. Desde que `users` es
-// SELECT/INSERT solo para authenticated (20260822120000), un select/
-// insert directo aquí truena contra RLS en cada arranque de una
-// instalación que ya tiene usuarios -- las RPC bypasean eso, y
-// seed_default_user() re-chequea "¿ya hay usuarios?" del lado del
-// servidor, así que sigue siendo no-op para cualquier instalación real.
 async function seedUsersIfEmpty() {
-  const { data: count, error } = await supabase.rpc('users_table_row_count');
+  const { count, error } = await supabase.from('users').select('id', { count: 'exact', head: true });
   must(error, 'No se pudo verificar la tabla de usuarios');
   if (count && count > 0) return;
 
@@ -133,19 +123,21 @@ async function seedUsersIfEmpty() {
     { username: 'cajero2', display_name: 'Cajero 2', role: 'cajero', password: 'cajero123' },
     { username: 'empleado', display_name: 'Empleado', role: 'empleado', password: 'empleado123' }
   ];
-  const branchId = getCurrentBranchId();
-  for (const acc of accounts) {
+  const rows = accounts.map((acc) => {
     const { salt, hash } = makeCredentials(acc.password);
-    const { error: seedErr } = await supabase.rpc('seed_default_user', {
-      p_username: acc.username,
-      p_name: acc.display_name,
-      p_role: acc.role,
-      p_password_hash: hash,
-      p_password_salt: salt,
-      p_branch_id: branchId
-    });
-    must(seedErr, 'No se pudieron crear las cuentas iniciales');
-  }
+    return {
+      username: acc.username,
+      name: acc.display_name,
+      role: acc.role,
+      // Columna legacy NOT NULL: se mantiene poblada por compatibilidad con
+      // el esquema real de Supabase; la autenticación real usa password_hash.
+      password: acc.password,
+      password_hash: hash,
+      password_salt: salt
+    };
+  });
+  const { error: insErr } = await supabase.from('users').insert(rows);
+  must(insErr, 'No se pudieron crear las cuentas iniciales');
 }
 
 async function init() {
@@ -157,91 +149,56 @@ async function init() {
 // ==========================================================================
 // 1. AUTENTICACIÓN Y CUENTAS
 // ==========================================================================
-// login() ya no verifica el password ni lee password_hash/salt del lado del
-// cliente -- eso ahora vive en la Edge Function `login`
-// (supabase/functions/login), server-side, junto al service_role. Esta
-// función manda username+password+branchId (cada instalación de escritorio
-// sirve UNA sucursal fija, ver setCurrentBranchId), y si la Edge Function
-// confirma que son válidos, establece la sesión real que devuelve
-// (auth.setSession) para que de ahí en adelante supabase.auth.uid() sea
-// real en cada request -- prerequisito para que RLS deje de ser
-// USING (true). El mismo scrypt+sal de siempre sigue siendo la fuente de
-// verdad de las contraseñas; nada de eso cambió, solo dónde se compara.
-async function invokeLoginFunction(body) {
-  return supabase.functions.invoke('login', { body });
-}
-
-// La Edge Function ocasionalmente falla en el primer intento después de
-// estar inactiva (cold start) y siempre funciona al reintentar de inmediato
-// -- verificado repetidas veces en pruebas. Solo se reintenta una vez, y
-// solo si NO es un 401 (contraseña/usuario incorrectos es un resultado
-// determinístico, reintentarlo no cambia nada).
 async function login(username, password) {
   const cleanUsername = String(username || '').trim().toLowerCase();
-  const body = {
-    identifier: cleanUsername,
-    password: password || '',
-    branchId: getCurrentBranchId()
-  };
 
-  let { data, error } = await invokeLoginFunction(body);
-  if (error && error.context && error.context.status !== 401) {
-    ({ data, error } = await invokeLoginFunction(body));
-  }
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('username', cleanUsername)
+    .eq('branch_id', getCurrentBranchId())
+    .eq('active', true)
+    .maybeSingle();
 
-  if (error) {
-    // FunctionsHttpError trae el body de la respuesta (401/500) en
-    // error.context -- si no se puede leer, cae al mensaje genérico de
-    // siempre para no filtrar detalles internos.
-    let serverMsg = null;
-    try {
-      const respBody = await error.context.json();
-      serverMsg = respBody && respBody.error;
-    } catch (_) {}
-    throw new Error(serverMsg || 'Usuario o contraseña incorrectos.');
-  }
-  if (!data || !data.session || !data.profile) {
-    throw new Error('No se pudo iniciar sesión.');
-  }
+  must(error, 'Error al consultar el usuario en Supabase');
+  if (!user) throw new Error('Usuario o contraseña incorrectos.');
 
-  const { error: sessionErr } = await supabase.auth.setSession({
-    access_token: data.session.access_token,
-    refresh_token: data.session.refresh_token
-  });
-  must(sessionErr, 'No se pudo establecer la sesión');
+  if (user.password_hash && user.password_salt) {
+    const hash = hashPassword(password || '', user.password_salt);
+    if (hash !== user.password_hash) {
+      throw new Error('Usuario o contraseña incorrectos.');
+    }
+  } else if (typeof user.password === 'string') {
+    if (user.password !== String(password || '')) {
+      throw new Error('Usuario o contraseña incorrectos.');
+    }
+
+    const { salt, hash } = makeCredentials(password || '');
+    const { error: migrateErr } = await supabase
+      .from('users')
+      .update({ password_hash: hash, password_salt: salt })
+      .eq('id', user.id);
+
+    must(migrateErr, 'No se pudo actualizar la contraseña del usuario');
+  } else {
+    throw new Error('La cuenta no tiene una contraseña configurada correctamente.');
+  }
 
   return {
-    id: data.profile.id,
-    username: data.profile.username,
-    displayName: data.profile.displayName,
-    role: data.profile.role,
-    roleId: data.profile.roleId,
-    permissions: data.profile.permissions || []
+    id: user.id,
+    username: user.username,
+    displayName: user.name,
+    role: user.role
   };
-}
-
-async function logout() {
-  await supabase.auth.signOut();
-  return true;
-}
-
-// Devuelve [] en vez de tronar si la RPC falla (rol borrado, instalación
-// vieja sin backfill, etc.) -- el login nunca debe fallar por esto.
-async function getUserPermissions(userId) {
-  try {
-    const { data, error } = await supabase.rpc('get_user_permissions', { p_user_id: userId });
-    if (error) throw error;
-    return data || [];
-  } catch (err) {
-    console.warn('No se pudieron obtener los permisos del usuario:', err.message || err);
-    return [];
-  }
 }
 
 async function changePassword(userId, newPassword) {
   if (!newPassword || newPassword.length < 4) throw new Error('La contraseña debe tener al menos 4 caracteres.');
   const { salt, hash } = makeCredentials(newPassword);
-  const { error } = await supabase.from('users').update({ password_hash: hash, password_salt: salt }).eq('id', userId).eq('branch_id', getCurrentBranchId());
+  // La columna legacy 'password' es NOT NULL en Supabase; se mantiene en
+  // sincronía con el hash (no se guarda en texto plano) para no violar la
+  // restricción y para que no quede una contraseña anterior obsoleta ahí.
+  const { error } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', userId).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo cambiar la contraseña');
   return true;
 }
@@ -249,31 +206,12 @@ async function changePassword(userId, newPassword) {
 async function getAllUsers() {
   const { data, error } = await supabase
     .from('users')
-    .select('id, username, display_name:name, role, role_id, active, created_at, roles(name, is_system)')
+    .select('id, username, display_name:name, role, active, created_at')
     .eq('branch_id', getCurrentBranchId())
     .order('role', { ascending: true })
     .order('username', { ascending: true });
   must(error, 'No se pudieron obtener las cuentas');
-  return (data || []).map((u) => ({ ...u, roleName: u.roles ? u.roles.name : null, roles: undefined }));
-}
-
-// role_id es la fuente de verdad nueva (Cuentas -> Roles); `role` (texto,
-// 'admin'/'cajero'/...) se sigue rellenando en minúsculas desde el nombre
-// del rol elegido para no romper el resto del código que todavía lo lee
-// (login, guardSession(['admin',...]) que aún no se hayan migrado, etc.).
-async function resolveRoleForUser(roleId, fallbackRoleText) {
-  if (roleId) {
-    const { data: role, error } = await supabase
-      .from('roles')
-      .select('id, name')
-      .eq('id', roleId)
-      .eq('branch_id', getCurrentBranchId())
-      .maybeSingle();
-    must(error, 'No se pudo verificar el rol');
-    if (!role) throw new Error('El rol seleccionado no existe en esta sucursal.');
-    return { roleId: role.id, roleText: role.name.toLowerCase() };
-  }
-  return { roleId: null, roleText: fallbackRoleText || 'cajero' };
+  return data;
 }
 
 async function createUser(data) {
@@ -283,42 +221,41 @@ async function createUser(data) {
   must(exErr);
   if (existing) throw new Error('Ese nombre de usuario ya existe.');
   const { salt, hash } = makeCredentials(data.password || '123456');
-  const { roleId, roleText } = await resolveRoleForUser(data.roleId, data.role);
   const { data: created, error } = await supabase
     .from('users')
     .insert([{
       username,
       name: data.display_name || username,
-      role: roleText,
-      role_id: roleId,
+      role: data.role || 'cajero',
+      // Columna legacy NOT NULL en Supabase; se rellena con el hash (no en
+      // texto plano) para no violar la restricción sin exponer la contraseña.
+      password: hash,
       password_hash: hash,
       password_salt: salt,
       active: data.active !== false,
       branch_id: getCurrentBranchId()
     }])
-    .select('id, username, display_name:name, role, role_id, active')
+    .select('id, username, display_name:name, role, active')
     .single();
   must(error, 'No se pudo crear la cuenta');
   return created;
 }
 
 async function updateUser(id, data) {
-  const { roleId, roleText } = await resolveRoleForUser(data.roleId, data.role);
   const patch = {
     name: data.display_name,
-    role: roleText,
-    role_id: roleId,
+    role: data.role || 'cajero',
     active: data.active !== false
   };
   const { error } = await supabase.from('users').update(patch).eq('id', id).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo actualizar la cuenta');
   if (data.password) {
     const { salt, hash } = makeCredentials(data.password);
-    const { error: pwErr } = await supabase.from('users').update({ password_hash: hash, password_salt: salt }).eq('id', id).eq('branch_id', getCurrentBranchId());
+    const { error: pwErr } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', id).eq('branch_id', getCurrentBranchId());
     must(pwErr, 'No se pudo actualizar la contraseña');
   }
   const { data: row, error: selErr } = await supabase
-    .from('users').select('id, username, display_name:name, role, role_id, active').eq('id', id).eq('branch_id', getCurrentBranchId()).single();
+    .from('users').select('id, username, display_name:name, role, active').eq('id', id).eq('branch_id', getCurrentBranchId()).single();
   must(selErr);
   return row;
 }
@@ -327,65 +264,6 @@ async function removeUser(id) {
   const { error } = await supabase.from('users').update({ active: false }).eq('id', id).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo desactivar la cuenta');
   return { deactivated: true };
-}
-
-// ==========================================================================
-// 1B. ROLES Y PERMISOS (Cuentas -> "Permisos por rol")
-// ==========================================================================
-async function getRoles() {
-  const { data, error } = await supabase.rpc('get_roles_by_branch', { p_branch_id: getCurrentBranchId() });
-  must(error, 'No se pudieron obtener los roles');
-  return data || [];
-}
-
-async function createRole(data) {
-  const { data: row, error } = await supabase.rpc('create_role', {
-    p_branch_id: getCurrentBranchId(),
-    p_name: data.name,
-    p_description: data.description || null
-  });
-  must(error, 'No se pudo crear el rol');
-  return row;
-}
-
-async function updateRole(id, data) {
-  const { data: row, error } = await supabase.rpc('update_role', {
-    p_branch_id: getCurrentBranchId(),
-    p_id: id,
-    p_name: data.name,
-    p_description: data.description || null
-  });
-  must(error, 'No se pudo actualizar el rol');
-  return row;
-}
-
-async function removeRole(id) {
-  const { error } = await supabase.rpc('remove_role', { p_branch_id: getCurrentBranchId(), p_id: id });
-  must(error, 'No se pudo eliminar el rol');
-  return { deleted: true };
-}
-
-async function getRolePermissions(roleId) {
-  const { data, error } = await supabase.rpc('get_role_permissions', {
-    p_branch_id: getCurrentBranchId(),
-    p_role_id: roleId
-  });
-  must(error, 'No se pudieron obtener los permisos del rol');
-  return data || [];
-}
-
-// permissions: [{ module, can_view, can_create, can_edit, can_delete }, ...]
-// -- siempre manda el arreglo completo de los 13 módulos, la RPC hace upsert
-// de cada uno (no borra los que falten, así que si la UI omite un módulo
-// por error, ese permiso simplemente no cambia -- no queda en blanco).
-async function setRolePermissions(roleId, permissions) {
-  const { data, error } = await supabase.rpc('set_role_permissions', {
-    p_branch_id: getCurrentBranchId(),
-    p_role_id: roleId,
-    p_permissions: permissions || []
-  });
-  must(error, 'No se pudo guardar los permisos del rol');
-  return data;
 }
 
 // ==========================================================================
@@ -451,8 +329,7 @@ async function createProduct(data) {
     p_employee_price: data.employee_price ? Number(data.employee_price) : null,
     p_active: data.active !== false,
     p_sort_order: Number(data.sort_order) || 0,
-    p_stock: normalizeStock(data.stock),
-    p_cost_per_unit: data.cost_per_unit != null && data.cost_per_unit !== '' ? Number(data.cost_per_unit) : null
+    p_stock: normalizeStock(data.stock)
   });
   must(error, 'No se pudo crear el producto');
   return row;
@@ -468,8 +345,7 @@ async function updateProduct(id, data) {
     p_employee_price: data.employee_price ? Number(data.employee_price) : null,
     p_active: data.active !== false,
     p_sort_order: Number(data.sort_order) || 0,
-    p_stock: normalizeStock(data.stock),
-    p_cost_per_unit: data.cost_per_unit != null && data.cost_per_unit !== '' ? Number(data.cost_per_unit) : null
+    p_stock: normalizeStock(data.stock)
   });
   must(error, 'No se pudo actualizar el producto');
   return row;
@@ -550,30 +426,11 @@ function mapCartItems(items) {
   }));
 }
 
-// Beneficio diario/crédito semanal configurables desde Ajustes (Settings,
-// key-value): antes 100/500 estaban hardcodeados dentro de process_sale.
-// Fallback a los mismos valores de siempre si la key no existe (instalación
-// previa a este ajuste) o viene corrupta.
-async function getEmployeeBenefitSettings() {
-  const settings = await getAllSettings();
-  return {
-    benefitEnabled: settings.benefit_enabled !== 'false',
-    benefitDailyAmount: Number(settings.benefit_daily_amount) > 0 ? Number(settings.benefit_daily_amount) : 100,
-    weeklyCreditEnabled: settings.weekly_credit_enabled !== 'false',
-    weeklyCreditLimit: Number(settings.weekly_credit_limit) > 0 ? Number(settings.weekly_credit_limit) : 500
-  };
-}
-
 async function createSale(payload, openedBy, cashierId) {
   if (!payload || !Array.isArray(payload.items) || payload.items.length === 0) {
     throw new Error('La venta no contiene artículos.');
   }
 
-  // Los topes de beneficio/crédito de empleado YA NO se mandan como
-  // parámetros del RPC (20260822090000_process_sale_server_side_benefit_settings.sql):
-  // process_sale los lee él mismo de `settings` -- mandarlos desde aquí
-  // permitía que cualquiera con la anon key los pasara directo por REST y
-  // se saltara el tope configurado en Ajustes.
   const { data, error } = await supabase.rpc('process_sale', {
     p_branch_id: getCurrentBranchId(),
     p_client_type: payload.clientType || 'public',
@@ -655,19 +512,15 @@ async function createSale(payload, openedBy, cashierId) {
     try {
       const payrollSettings = await getPayrollSettings();
       const { start, end } = getWeekRange(payrollSettings.dayNumber);
-      // create_payroll_deduction (RPC, SECURITY DEFINER) reemplaza el insert
-      // directo: payroll_deductions tenía "allow_anon_all" FOR ALL abierta,
-      // cerrada en 20260822100000_close_remaining_anon_write_access.sql.
-      const { error: dedErr } = await supabase.rpc('create_payroll_deduction', {
-        p_branch_id: getCurrentBranchId(),
-        p_employee_name: data.employee_name,
-        p_amount: Number(data.credit_amount),
-        p_sale_id: data.id,
-        p_reason: 'Excedente crédito nómina - venta empleado',
-        p_status: 'pendiente',
-        p_week_start: start,
-        p_week_end: end
-      });
+      const { error: dedErr } = await supabase.from('payroll_deductions').insert([{
+        employee_name: data.employee_name,
+        amount: Number(data.credit_amount),
+        sale_id: data.id,
+        reason: 'Excedente crédito nómina - venta empleado',
+        status: 'pendiente',
+        week_start: start,
+        week_end: end
+      }]);
       if (dedErr) console.error('No se pudo registrar la deducción de nómina:', dedErr.message);
     } catch (err) {
       console.error('No se pudo registrar la deducción de nómina:', err.message);
@@ -767,10 +620,13 @@ async function getSaleById(id) {
 async function getAllSales(filters = {}) {
   let query = supabase.from('sales').select('*').eq('branch_id', getCurrentBranchId());
   if (filters.status) query = query.eq('status', filters.status);
-  // Antes hardcodeaba "Xalapa = UTC-6" a mano (mismo patrón ya corregido en
-  // getCorteResumen) -- unificado con localDayStartUtcIso/localDayEndUtcIso.
-  if (filters.dateFrom) query = query.gte('created_at', localDayStartUtcIso(filters.dateFrom));
-  if (filters.dateTo) query = query.lte('created_at', localDayEndUtcIso(filters.dateTo));
+  if (filters.dateFrom) query = query.gte('created_at', `${filters.dateFrom}T06:00:00.000Z`);
+  if (filters.dateTo) {
+    const d = new Date(filters.dateTo);
+    d.setDate(d.getDate() + 1);
+    const next = d.toISOString().split('T')[0];
+    query = query.lt('created_at', `${next}T06:00:00.000Z`);
+  }
   query = query.order('id', { ascending: false });
   if (filters.limit) query = query.limit(Number(filters.limit));
   const { data, error } = await query;
@@ -823,8 +679,8 @@ async function getEmployeeDailyConsumption(employeeId) {
 // Resumen de artículos vendidos (ventas completadas) en un rango de fechas,
 // sin límite de filas — usado por el reporte/CSV de "productos".
 async function getProductsSummary(dateFrom, dateTo) {
-  const fromTs = localDayStartUtcIso(dateFrom);
-  const toTs = localDayEndUtcIso(dateTo);
+  const fromTs = `${dateFrom}T00:00:00`;
+  const toTs = `${dateTo}T23:59:59.999`;
   const { data: items, error } = await supabase.rpc('get_sale_items_summary', {
     p_branch_id: getCurrentBranchId(),
     p_from: fromTs,
@@ -857,18 +713,9 @@ async function markSalePrinted(id) {
 // cantidad de artículos: hay como máximo un evento por comanda nueva.
 //
 // Requiere que la tabla public.sales esté agregada a la publicación
-// "supabase_realtime" en Supabase (Database > Replication). Este canal se
-// abre en main.js justo después de db.init(), ANTES del login -- RLS
-// (20260822120000_rls_restrictive_phase1.sql) dejó `sales` visible solo
-// para `authenticated`, así que hasta que alguien inicie sesión este canal
-// no recibe eventos (Realtime aplica la misma RLS que REST). Se autocura
-// solo: supabase-js empuja el token nuevo a los canales ya abiertos cuando
-// login() hace auth.setSession(), sin necesitar recrear la suscripción
-// (verificado). La única ventana real perdida es entre el arranque de la
-// app y el primer login -- a diferencia del KDS "sin login" (ver línea
-// ~1417), que si nadie loguea NUNCA en toda la sesión, se queda sin
-// Realtime para siempre (por eso ese sí tiene respaldo de polling en
-// main.js, éste no lo necesita).
+// "supabase_realtime" en Supabase (Database > Replication) y que exista una
+// policy de SELECT para el rol anon (ya existe: sales_select_anon) — RLS se
+// aplica también a los eventos de Realtime.
 function subscribeToNewSales(onInsert, onStatusChange) {
   return supabase
     .channel('sales-inserts')
@@ -895,12 +742,7 @@ function subscribeToNewSales(onInsert, onStatusChange) {
 // 5. COMANDAS (mesas)
 // ==========================================================================
 async function getSettingValue(key, fallback) {
-  const { data, error } = await supabase
-    .from('settings')
-    .select('value')
-    .eq('key', key)
-    .eq('branch_id', getCurrentBranchId())
-    .maybeSingle();
+  const { data, error } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
   if (error || !data) return fallback;
   return data.value;
 }
@@ -1442,17 +1284,14 @@ const KDS_TIMESTAMP_COLUMN = {
 // Todo lo que la cocina todavía no entregó, con sus artículos. Se excluyen
 // las canceladas (canceladas antes de cocinar no deben seguir pidiendo que
 // se cocinen) aunque su kds_status nunca se haya tocado.
-//
-// get_kds_orders (RPC, SECURITY DEFINER, 20260822120000) reemplaza el
-// select directo a `sales` -- el KDS corre "sin login" (ver comentario
-// arriba), y desde esa migración `sales` es visible solo para
-// `authenticated`. El RPC valida branch_id server-side, igual que el resto
-// de los reads de esta función (get_sale_items_with_modifiers,
-// get_all_product_components_by_branch, ambos ya eran RPC desde antes).
 async function getKdsOrders() {
-  const { data: sales, error } = await supabase.rpc('get_kds_orders', {
-    p_branch_id: getCurrentBranchId()
-  });
+  const { data: sales, error } = await supabase
+    .from('sales')
+    .select('id, table_number, client_type, folio, status, created_at, kds_status, kds_started_at, kds_ready_at, is_delivery, delivery_fee, driver_name, total')
+    .eq('branch_id', getCurrentBranchId())
+    .neq('kds_status', 'entregada')
+    .neq('status', 'cancelada')
+    .order('created_at', { ascending: true });
   must(error, 'No se pudieron obtener las órdenes de cocina');
   if (!sales || sales.length === 0) return [];
 
@@ -1808,16 +1647,13 @@ function mapCashCategoryToCostCategory(categoriaCosto) {
   return MAP[categoriaCosto] || 'variable';
 }
 async function getCorteResumen(fecha) {
-  // fecha = '2026-08-16', día local de la sucursal. Antes esto hardcodeaba
-  // "Xalapa = UTC-6" a mano (${fecha}T06:00:00.000Z) más una vuelta de
-  // getDate()/setDate() para el día siguiente -- dos errores de zona horaria
-  // que casualmente se cancelaban entre sí mientras México no tuviera
-  // horario de verano, pero quedaba frágil y desacoplado de la zona real del
-  // equipo. Se unifica con el mismo helper que ya usa getUnifiedHistory
-  // (localDayStartUtcIso/localDayEndUtcIso): toma la hora local real del
-  // sistema operativo en vez de asumir un offset fijo.
-  const inicioUTC = localDayStartUtcIso(fecha);
-  const finUTC = localDayEndUtcIso(fecha);
+  // fecha = '2026-08-16' en hora de Xalapa
+  // Xalapa 00:00 = UTC 06:00
+  const inicioUTC = `${fecha}T06:00:00.000Z`;
+  const d = new Date(fecha);
+  d.setDate(d.getDate() + 1);
+  const fechaSig = d.toISOString().split('T')[0];
+  const finUTC = `${fechaSig}T05:59:59.999Z`;
 
   // payment_status IN ('pagado_en_caja', 'liquidado') es lo único que
   // realmente está en el cajón. 'dinero_con_repartidor' se excluye a
@@ -2024,11 +1860,8 @@ async function getCorteByFecha(fecha) {
 // 9. REPORTES / RENTABILIDAD
 // ==========================================================================
 async function computeProfitability(dateFrom, dateTo) {
-  // Mismo bug de zona horaria ya corregido en getUnifiedHistory/getCorteResumen
-  // (string sin offset, Postgres lo interpreta en UTC del servidor, no en la
-  // hora local) -- esta función quedó pendiente en esa sesión, se cierra aquí.
-  const fromTs = localDayStartUtcIso(dateFrom);
-  const toTs = localDayEndUtcIso(dateTo);
+  const fromTs = `${dateFrom}T00:00:00`;
+  const toTs = `${dateTo}T23:59:59.999`;
 
   const { data: sales, error: salesErr } = await supabase
     .from('sales').select('total, payment_method, created_at')
@@ -2050,77 +1883,18 @@ async function computeProfitability(dateFrom, dateTo) {
   });
   must(itemsErr);
 
-  // Food cost / margen / valuación (feature nueva 2026-08-21): reusa lo que
-  // ya existe (getAllProducts, getAllRecipeCosts, getAllInventory), todo ya
-  // filtrado por sucursal -- no hace falta ninguna consulta extra a mano.
-  const [allProducts, recipeCostByProduct, allInventory] = await Promise.all([
-    getAllProducts(),
-    getAllRecipeCosts(),
-    getAllInventory()
-  ]);
-  const productsById = new Map((allProducts || []).map((p) => [p.id, p]));
-
-  // Costo de un producto: si tiene receta (stock NULL), el costo de receta
-  // ya calculado; si es "directo" (stock NOT NULL), su cost_per_unit propio
-  // -- null si nunca se capturó (margen desconocido, no se inventa un 0).
-  const foodCostOf = (product) => {
-    if (!product) return null;
-    if (product.stock == null) {
-      const recipeCost = recipeCostByProduct[product.id];
-      return recipeCost != null ? recipeCost : null;
-    }
-    return product.cost_per_unit != null ? Number(product.cost_per_unit) : null;
-  };
-
   const totalSales = (sales || []).reduce((sum, s) => sum + Number(s.total || 0), 0);
   const totalTickets = (sales || []).length;
   const totalWaste = (wasteRows || []).reduce((sum, w) => sum + Number(w.cost || 0), 0);
   const totalCosts = (costRows || []).reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
   const byProduct = {};
-  let cogs = 0;
-  let cogsUnknownCount = 0;
   (items || []).forEach((it) => {
     if (!byProduct[it.name]) byProduct[it.name] = { name: it.name, unidades: 0, total: 0 };
     byProduct[it.name].unidades += Number(it.quantity || 0);
     byProduct[it.name].total += Number(it.subtotal || 0);
-
-    // COGS solo cubre item_type='product' (con receta o costo directo
-    // capturado): un combo/promo (item_type='promo') se arma de varios
-    // productos vía product_components, que no se recorre aquí -- se deja
-    // fuera del costo de venta por ahora en vez de adivinar su costo.
-    if (it.item_type === 'product' && it.ref_id != null) {
-      const cost = foodCostOf(productsById.get(it.ref_id));
-      if (cost != null) {
-        cogs += cost * (Number(it.quantity) || 0);
-      } else {
-        cogsUnknownCount += 1;
-      }
-    }
   });
   const topProducts = Object.values(byProduct).sort((a, b) => b.total - a.total).slice(0, 8);
-
-  const productMargins = (allProducts || [])
-    .filter((p) => Number(p.price) > 0)
-    .map((p) => {
-      const foodCost = foodCostOf(p);
-      const margin = foodCost != null ? Number(p.price) - foodCost : null;
-      return {
-        id: p.id,
-        name: p.name,
-        price: Number(p.price),
-        isRecipe: p.stock == null,
-        foodCost,
-        margin,
-        marginPct: margin != null && Number(p.price) > 0 ? margin / Number(p.price) : null
-      };
-    })
-    .sort((a, b) => (a.marginPct ?? Infinity) - (b.marginPct ?? Infinity));
-
-  const inventoryValuation = (allInventory || []).reduce(
-    (sum, i) => sum + (Number(i.stock) || 0) * (Number(i.cost_per_unit) || 0),
-    0
-  );
 
   const byDayMap = {};
   (sales || []).forEach((s) => {
@@ -2147,16 +1921,7 @@ async function computeProfitability(dateFrom, dateTo) {
     netProfit: totalSales - totalWaste - totalCosts,
     topProducts,
     byDay,
-    byPayment: Object.values(byPaymentMap),
-    // Food cost / margen / valuación: cogs y grossProfit solo cubren
-    // item_type='product' (ver cogsUnknownCount) -- combos/promos y
-    // productos directos sin cost_per_unit capturado quedan fuera del
-    // costo de venta, no se les inventa un valor.
-    cogs,
-    cogsUnknownCount,
-    grossProfit: totalSales - cogs,
-    productMargins,
-    inventoryValuation
+    byPayment: Object.values(byPaymentMap)
   };
 }
 
@@ -2210,10 +1975,14 @@ async function createEmployee(data) {
         active
     });
 
+    // PENDIENTE: create_employee todavía no recibe p_branch_id -- RPC "caja
+    // negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql. Agregar
+    // `p_branch_id: getCurrentBranchId()` aquí en cuanto exista 0009-parte-2
+    // (y employees.branch_id ya no dependa del DEFAULT -- ver
+    // 20260820900000_drop_branch_default_RUN_LAST.sql).
     const { data: row, error } = await supabase.rpc(
         'create_employee',
         {
-            p_branch_id: getCurrentBranchId(),
             p_name: name,
             p_role: role,
             p_salary: salary,
@@ -2258,24 +2027,16 @@ async function removeEmployee(id) {
   return data;
 }
 
-// NO redeclarar localDateStr aquí -- ya existe arriba (línea ~65, hora
-// local, usada por getWeekRange/isoMondayOf). Hasta 2026-08-22 hubo una
-// SEGUNDA función con el mismo nombre justo aquí, implementada con
-// `d.toISOString().slice(0,10)` (UTC, no local) -- al ser dos declaraciones
-// `function` con el mismo nombre en el mismo scope de módulo, la segunda
-// pisaba silenciosamente a la primera para TODO el archivo, incluidas las
-// llamadas de getPayrollData/getPayrollDetail (líneas ~2322/2444) que
-// convierten cada timestamp de asistencia a "qué día fue" para calcular
-// faltas: cualquier checada después de ~6pm hora local (turno de cierre)
-// se archivaba bajo el día SIGUIENTE en UTC, marcando al empleado como
-// "falta" el día que sí trabajó y "presente" un día que no. Bug real de
-// nómina, no solo de Asistencia -- corregido eliminando el duplicado.
+function localDateStr(d = new Date()) {
+  return d.toISOString().slice(0, 10);
+}
+
 async function getTodayAttendance() {
-  const today = localDateStr(new Date());
+  const today = localDateStr();
   const { data, error } = await supabase
     .from('attendance').select('*')
     .eq('branch_id', getCurrentBranchId())
-    .gte('timestamp', localDayStartUtcIso(today)).lte('timestamp', localDayEndUtcIso(today))
+    .gte('timestamp', `${today}T00:00:00`).lte('timestamp', `${today}T23:59:59.999`)
     .order('timestamp', { ascending: false });
   must(error, 'No se pudo obtener la asistencia de hoy');
   return data;
@@ -2283,19 +2044,18 @@ async function getTodayAttendance() {
 
 async function getAllAttendance(filters = {}) {
   let query = supabase.from('attendance').select('*').eq('branch_id', getCurrentBranchId());
-  if (filters.dateFrom) query = query.gte('timestamp', localDayStartUtcIso(filters.dateFrom));
-  if (filters.dateTo) query = query.lte('timestamp', localDayEndUtcIso(filters.dateTo));
+  if (filters.dateFrom) query = query.gte('timestamp', `${filters.dateFrom}T00:00:00`);
+  if (filters.dateTo) query = query.lte('timestamp', `${filters.dateTo}T23:59:59.999`);
   query = query.order('timestamp', { ascending: false });
   const { data, error } = await query;
   must(error, 'No se pudo obtener la asistencia');
   return data;
 }
 
+// PENDIENTE: register_attendance todavía no recibe p_branch_id -- RPC "caja
+// negra", ver 20260820060000_tmp_introspect_pending_rpcs.sql.
 async function registerAttendance(employeeId) {
-  const { data, error } = await supabase.rpc('register_attendance', {
-    p_branch_id: getCurrentBranchId(),
-    p_employee_id: employeeId
-  });
+  const { data, error } = await supabase.rpc('register_attendance', { p_employee_id: employeeId });
   must(error, 'No se pudo registrar la asistencia');
   return data;
 }
@@ -2306,12 +2066,12 @@ async function registerAttendance(employeeId) {
 async function getPayrollWeek(weekStart) {
   const { data: employees, error } = await supabase.from('employees').select('*').eq('branch_id', getCurrentBranchId()).eq('active', true).order('name');
   must(error, 'No se pudieron obtener los empleados');
-  const { data: records, error: recErr } = await supabase.from('payroll_weeks').select('*').eq('branch_id', getCurrentBranchId()).eq('week_start', weekStart);
+  const { data: records, error: recErr } = await supabase.from('payroll_weeks').select('*').eq('week_start', weekStart);
   must(recErr, 'No se pudo obtener la nómina de la semana');
 
   const { data: creditRows, error: credErr } = await supabase.rpc(
     'get_payroll_week_credit',
-    { p_branch_id: getCurrentBranchId(), p_week_start: weekStart }
+    { p_week_start: weekStart }
   );
   must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
@@ -2368,7 +2128,6 @@ async function getPayrollDeductionsPendientes(weekStart) {
 
 async function setPayrollBonus(payload) {
   const { data, error } = await supabase.rpc('set_payroll_bonus', {
-    p_branch_id: getCurrentBranchId(),
     p_employee_id: payload.employeeId,
     p_week_start: payload.weekStart,
     p_bonus_credited: !!payload.bonusCredited
@@ -2378,7 +2137,7 @@ async function setPayrollBonus(payload) {
 }
 
 async function getPayrollHistory(filters = {}) {
-  let query = supabase.from('payroll_weeks').select('*').eq('branch_id', getCurrentBranchId());
+  let query = supabase.from('payroll_weeks').select('*');
   if (filters.weekFrom) query = query.gte('week_start', filters.weekFrom);
   if (filters.weekTo) query = query.lte('week_start', filters.weekTo);
   query = query.order('week_start', { ascending: false }).order('employee_name', { ascending: true });
@@ -2417,7 +2176,7 @@ function faltaDeductionDivisor() {
 }
 
 async function getEmployeesWithAttendanceHistory() {
-  const { data, error } = await supabase.from('attendance').select('employee_id').eq('branch_id', getCurrentBranchId());
+  const { data, error } = await supabase.from('attendance').select('employee_id');
   must(error, 'No se pudo verificar el historial de asistencia');
   return new Set((data || []).map((a) => a.employee_id));
 }
@@ -2437,22 +2196,20 @@ async function getPayrollData(weekStart, weekEnd) {
   const { data: bonusRecords, error: bonusErr } = await supabase
     .from('payroll_weeks')
     .select('employee_id, bonus_credited')
-    .eq('branch_id', getCurrentBranchId())
     .eq('week_start', bonusWeekStart);
   must(bonusErr, 'No se pudo obtener el bono acreditado de la semana');
 
   const { data: creditRows, error: credErr } = await supabase.rpc(
     'get_payroll_week_credit',
-    { p_branch_id: getCurrentBranchId(), p_week_start: bonusWeekStart }
+    { p_week_start: bonusWeekStart }
   );
   must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
   const { data: attendance, error: attErr } = await supabase
     .from('attendance')
     .select('employee_id, timestamp')
-    .eq('branch_id', getCurrentBranchId())
-    .gte('timestamp', localDayStartUtcIso(weekStart))
-    .lte('timestamp', localDayEndUtcIso(weekEnd));
+    .gte('timestamp', `${weekStart}T00:00:00`)
+    .lte('timestamp', `${weekEnd}T23:59:59.999`);
   must(attErr, 'No se pudo obtener la asistencia de la semana');
 
   // Mientras un empleado no tenga NINGÚN registro histórico de asistencia,
@@ -2472,8 +2229,8 @@ async function getPayrollData(weekStart, weekEnd) {
     .eq('client_type', 'employee')
     .eq('status', 'completada')
     .eq('branch_id', getCurrentBranchId())
-    .gte('created_at', localDayStartUtcIso(weekStart))
-    .lte('created_at', localDayEndUtcIso(weekEnd));
+    .gte('created_at', `${weekStart}T00:00:00`)
+    .lte('created_at', `${weekEnd}T23:59:59.999`);
   must(consErr, 'No se pudo obtener el beneficio de empleados de la semana');
 
   const bonusByEmployee = {};
@@ -2559,10 +2316,9 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
     .from('payroll_deductions')
     .select('*')
     .eq('employee_name', employeeName)
-    .eq('branch_id', getCurrentBranchId())
     .eq('status', 'pendiente')
-    .gte('created_at', localDayStartUtcIso(weekStart))
-    .lte('created_at', localDayEndUtcIso(weekEnd))
+    .gte('created_at', `${weekStart}T00:00:00`)
+    .lte('created_at', `${weekEnd}T23:59:59.999`)
     .order('created_at', { ascending: false });
   must(credErr, 'No se pudieron obtener los créditos del empleado');
 
@@ -2578,8 +2334,8 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
       .eq('employee_id', employee.id)
       .eq('client_type', 'employee')
       .eq('status', 'completada')
-      .gte('created_at', localDayStartUtcIso(weekStart))
-      .lte('created_at', localDayEndUtcIso(weekEnd))
+      .gte('created_at', `${weekStart}T00:00:00`)
+      .lte('created_at', `${weekEnd}T23:59:59.999`)
       .order('created_at', { ascending: false });
     must(ventasErr, 'No se pudo obtener el beneficio de empleado del empleado');
     beneficio = (ventas || [])
@@ -2595,17 +2351,15 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
     const { count: historyCount, error: histErr } = await supabase
       .from('attendance')
       .select('id', { count: 'exact', head: true })
-      .eq('employee_id', employee.id)
-      .eq('branch_id', getCurrentBranchId());
+      .eq('employee_id', employee.id);
     must(histErr);
 
     const { data: attendance, error: attErr } = await supabase
       .from('attendance')
       .select('timestamp')
       .eq('employee_id', employee.id)
-      .eq('branch_id', getCurrentBranchId())
-      .gte('timestamp', localDayStartUtcIso(weekStart))
-      .lte('timestamp', localDayEndUtcIso(weekEnd));
+      .gte('timestamp', `${weekStart}T00:00:00`)
+      .lte('timestamp', `${weekEnd}T23:59:59.999`);
     must(attErr);
     const diasAsistidos = historyCount > 0
       ? new Set((attendance || []).map((a) => localDateStr(new Date(a.timestamp))))
@@ -2646,29 +2400,22 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
     deduccion_faltas: r.deduccionFaltas,
     beneficio_usado: r.beneficioUsado,
     total_pagado: r.totalAPagar,
-    cerrado_por: closedBy || 'admin',
-    branch_id: getCurrentBranchId()
+    cerrado_por: closedBy || 'admin'
   }));
 
-  // upsert_payroll_history / close_payroll_deductions (RPC, SECURITY
-  // DEFINER) reemplazan el upsert/update directos: payroll_history y
-  // payroll_deductions tenían "allow_anon_all" FOR ALL abierta, cerrada en
-  // 20260822100000_close_remaining_anon_write_access.sql.
   if (snapshot.length > 0) {
-    const { error: histErr } = await supabase.rpc('upsert_payroll_history', {
-      p_branch_id: getCurrentBranchId(),
-      p_rows: snapshot
-    });
+    const { error: histErr } = await supabase
+      .from('payroll_history')
+      .upsert(snapshot, { onConflict: 'week_start,employee_id' });
     must(histErr, 'No se pudo guardar el historial de nómina');
   }
 
-  // El filtro de branch_id evita liquidar deducciones pendientes de otra
-  // sucursal que ni siquiera hubiera cerrado todavía (el RPC lo exige).
-  const { error: updErr } = await supabase.rpc('close_payroll_deductions', {
-    p_branch_id: getCurrentBranchId(),
-    p_from: localDayStartUtcIso(weekStart),
-    p_to: localDayEndUtcIso(weekEnd)
-  });
+  const { error: updErr } = await supabase
+    .from('payroll_deductions')
+    .update({ status: 'descontado' })
+    .eq('status', 'pendiente')
+    .gte('created_at', `${weekStart}T00:00:00`)
+    .lte('created_at', `${weekEnd}T23:59:59.999`);
   must(updErr, 'No se pudo cerrar la nómina');
 
   return { closed: true, employees: snapshot.length };
@@ -2704,48 +2451,17 @@ function saleHistoryTipo(sale) {
   }
   return 'venta';
 }
-
-// Ventas legadas usan 'completada' (español, valor real que inserta
-// process_sale/las RPC de comandas -- ver 20260820020000_rpc_branch_id_core_sales.sql);
-// se acepta también 'completed'/'completado' por si hay datos de otro origen,
-// pero 'completada' es el único valor que este código realmente escribe hoy.
-const SALE_HISTORY_STATUSES = ['completada', 'completed', 'completado'];
-const WASTE_HISTORY_TIPOS = ['merma', 'consumo_interno'];
-
-function normalizeHistoryDate(str) {
-  if (!str) return null;
-  const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(str);
-  if (dmy) {
-    const [, dd, mm, yyyy] = dmy;
-    return `${yyyy}-${mm}-${dd}`;
-  }
-  return String(str).slice(0, 10);
-}
-
-// PostgREST/Postgres interpretan un timestamp sin offset ('YYYY-MM-DDTHH:mm:ss')
-// en la zona del SERVIDOR (UTC en Supabase), no en la del escritorio. Mandar la
-// hora local tal cual desfasa la ventana de "Hoy" por el huso horario local y
-// puede dejar fuera ventas del día -- por eso se construye un Date local y se
-// convierte a su instante UTC real con toISOString() antes de filtrar.
-function localDayStartUtcIso(dateStr) {
-  return new Date(`${dateStr}T00:00:00`).toISOString();
-}
-function localDayEndUtcIso(dateStr) {
-  return new Date(`${dateStr}T23:59:59.999`).toISOString();
-}
-
 async function getUnifiedHistory(filters = {}) {
-  const startDate = normalizeHistoryDate(filters.startDate) || '2000-01-01';
-  const endDate = normalizeHistoryDate(filters.endDate) || '2999-12-31';
-  const fromTs = localDayStartUtcIso(startDate);
-  const toTs = localDayEndUtcIso(endDate);
-  const branchId = getCurrentBranchId();
+  const startDate = filters.startDate || '2000-01-01';
+  const endDate = filters.endDate || '2999-12-31';
+  const fromTs = `${startDate}T00:00:00`;
+  const toTs = `${endDate}T23:59:59.999`;
 
   const { data: sales, error: salesErr } = await supabase
     .from('sales')
     .select('*')
-    .in('status', SALE_HISTORY_STATUSES)
-    .eq('branch_id', branchId)
+    .eq('status', 'completada')
+    .eq('branch_id', getCurrentBranchId())
     .gte('created_at', fromTs)
     .lte('created_at', toTs)
     .order('created_at', { ascending: false });
@@ -2765,49 +2481,27 @@ async function getUnifiedHistory(filters = {}) {
     });
   }
 
-  // Si el usuario ya filtra por un tipo específico, no traigas de más: si es
-  // un tipo de merma/waste, acota la query a ese; si es un tipo de venta
-  // (venta/para_llevar/domicilio/beneficio_empleado/credito_nomina) ninguna
-  // fila de waste puede calzar, así que ni se consulta.
-  let wasteTipoFilter = WASTE_HISTORY_TIPOS;
-  if (filters.tipo && filters.tipo !== 'todos') {
-    wasteTipoFilter = WASTE_HISTORY_TIPOS.includes(filters.tipo) ? [filters.tipo] : null;
-  }
-
+  // --- FIX: waste NO tiene branch_id, filtramos por inventory_id ---
   let waste = [];
-  if (wasteTipoFilter) {
-    try {
-      // waste.branch_id ya existe (columna agregada 2026-08-21), pero hay
-      // filas viejas con branch_id NULL -- para esas se cae a inventory_id
-      // para inferir la sucursal. Si no toca ninguna fila no truena el
-      // historial completo, solo se registra y se sigue con waste vacío.
-      const { data: inv, error: invErr } = await supabase
-        .from('inventory')
-        .select('id')
-        .eq('branch_id', branchId);
-      if (invErr) throw invErr;
-      const invIds = (inv || []).map((i) => i.id);
+  try {
+    const { data: inv } = await supabase.from('inventory').select('id').eq('branch_id', getCurrentBranchId());
+    const invIds = (inv || []).map(i => i.id);
 
-      let query = supabase
-        .from('waste')
-        .select('*')
-        .in('tipo', wasteTipoFilter)
-        .gte('created_at', fromTs)
-        .lte('created_at', toTs)
-        .order('created_at', { ascending: false });
-
-      query = invIds.length > 0
-        ? query.or(`branch_id.eq.${branchId},and(branch_id.is.null,inventory_id.in.(${invIds.join(',')}))`)
-        : query.eq('branch_id', branchId);
-
-      const { data: wasteData, error: wasteErr } = await query;
-      if (wasteErr) throw wasteErr;
-      waste = wasteData || [];
-    } catch (e) {
-      console.warn('No se pudo obtener merma/consumo interno para el historial:', e.message || e);
-      waste = [];
+    let query = supabase.from('waste').select('*').in('tipo', ['consumo_interno', 'merma']).gte('created_at', fromTs).lte('created_at', toTs).order('created_at', { ascending: false });
+    
+    if (invIds.length > 0) {
+      query = query.in('inventory_id', invIds);
     }
+    
+    const { data: wasteData, error: wasteErr } = await query;
+    if (wasteErr) throw wasteErr;
+    waste = wasteData || [];
+  } catch (e) {
+    console.warn('Waste fallback sin filtro de sucursal:', e.message);
+    const { data } = await supabase.from('waste').select('*').in('tipo', ['consumo_interno', 'merma']).gte('created_at', fromTs).lte('created_at', toTs).order('created_at', { ascending: false });
+    waste = data || [];
   }
+  // --- FIN FIX ---
 
   const rows = [];
 
@@ -2888,31 +2582,13 @@ async function getUnifiedHistory(filters = {}) {
     return true;
   });
   const sumTipo = (tipo) => kpiScope.filter((r) => r.tipo === tipo).reduce((sum, r) => sum + r.total, 0);
-
-  // COGS/margen (reusa computeProfitability, ya construido para Costos):
-  // es un agregado de TODA la sucursal en el rango de fechas, no se puede
-  // acotar a filters.employeeName/paymentMethod como el resto de los KPIs
-  // de arriba (requeriría recalcular costo por renglón sobre ese subconjunto,
-  // no solo sumar); se muestra igual, etiquetado como "del rango" en la UI.
-  let cogs = 0;
-  let grossProfit = 0;
-  try {
-    const profitability = await computeProfitability(startDate, endDate);
-    cogs = profitability.cogs;
-    grossProfit = profitability.grossProfit;
-  } catch (e) {
-    console.warn('No se pudo calcular COGS/margen para el historial:', e.message || e);
-  }
-
   const kpis = {
     ventasTotales: sumTipo('venta') + sumTipo('para_llevar') + sumTipo('domicilio'),
     consumoInterno: sumTipo('consumo_interno'),
     beneficioEmpleados: sumTipo('beneficio_empleado'),
     paraLlevar: sumTipo('para_llevar'),
     domicilio: sumTipo('domicilio'),
-    mermaTotal: sumTipo('merma'),
-    cogs,
-    grossProfit
+    mermaTotal: sumTipo('merma')
   };
 
   const filtered = rows.filter((r) => {
@@ -2928,69 +2604,21 @@ async function getUnifiedHistory(filters = {}) {
 
   return { rows: filtered, kpis };
 }
-//===================================================
+//==========================================================================
 // 12. AJUSTES
 // ==========================================================================
 async function getAllSettings() {
-  const { data, error } = await supabase
-    .from('settings')
-    .select('key, value')
-    .eq('branch_id', getCurrentBranchId());
+  const { data, error } = await supabase.from('settings').select('key, value');
   must(error, 'No se pudieron obtener los ajustes');
   const obj = {};
   (data || []).forEach((r) => (obj[r.key] = r.value));
   return obj;
 }
 
-// settings ya es por sucursal (branch_id + UNIQUE(key, branch_id), ver
-// 20260822050000_settings_branch_isolation.sql). set_setting() (el RPC que
-// hacía este upsert) es "caja negra" -- nunca versionado en este repo, no
-// se reescribe a ciegas. En vez de eso se hace el upsert directo contra la
-// tabla: settings ya tiene RLS abierta a anon desde
-// 20260817020000_settings_rls_policy.sql, así que esto no necesita el RPC
-// en absoluto y sí queda scoped a la sucursal actual.
-// set_branch_setting (RPC, SECURITY DEFINER) reemplaza el upsert directo que
-// esta función hacía antes: settings tenía una policy "allow_anon_all" FOR
-// ALL abierta desde 20260817020000_settings_rls_policy.sql, así que
-// cualquiera con la anon key podía escribir cualquier fila de settings de
-// cualquier sucursal directo por REST -- cerrada en
-// 20260822100000_close_remaining_anon_write_access.sql, que también crea
-// este RPC.
 async function setSetting(key, value) {
-  const { error } = await supabase.rpc('set_branch_setting', {
-    p_branch_id: getCurrentBranchId(),
-    p_key: key,
-    p_value: String(value)
-  });
+  const { error } = await supabase.rpc('set_setting', { p_key: key, p_value: String(value) });
   must(error, 'No se pudo guardar el ajuste');
   return true;
-}
-
-// Logo del negocio (Ajustes -> SaaS). Sube a Storage (bucket "logos",
-// público) bajo una ruta por sucursal, y guarda la URL pública resultante
-// como un ajuste normal (logo_url) -- settings ya es por sucursal (ver
-// arriba), así que cada sucursal guarda/lee su propio logo.
-async function uploadLogo(filePath, originalFileName) {
-  const ext = (path.extname(originalFileName || '') || '.png').toLowerCase();
-  const MIME_BY_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
-  const contentType = MIME_BY_EXT[ext];
-  if (!contentType) throw new Error('Formato de imagen no soportado. Usa PNG, JPG o WEBP.');
-
-  const buffer = fs.readFileSync(filePath);
-  const storagePath = `${getCurrentBranchId()}/logo-${Date.now()}${ext}`;
-
-  const { error: upErr } = await supabase.storage
-    .from('logos')
-    .upload(storagePath, buffer, { contentType, upsert: true });
-  must(upErr, 'No se pudo subir el logo');
-
-  const { data: pub } = supabase.storage.from('logos').getPublicUrl(storagePath);
-  const logoUrl = pub.publicUrl;
-
-  await setSetting('logo_url', logoUrl);
-  await setSetting('logo_updated_at', new Date().toISOString());
-
-  return { logoUrl };
 }
 
 // Lector de huella biométrico (Ajustes -> Asistencia/Biometría). Igual que
@@ -3040,21 +2668,8 @@ module.exports = {
   setCurrentBranchId,
   getAllBranches,
   subscribeToNewSales,
-  // exportadas solo para tests/*.test.js (lógica pura, sin red) -- no las
-  // usa main.js
-  localDateStr,
-  getWeekRange,
-  isoMondayOf,
-  normalizeStock,
-  mapCartItems,
-  faltaDeductionDivisor,
-  saleHistoryTipo,
-  normalizeHistoryDate,
-  localDayStartUtcIso,
-  localDayEndUtcIso,
   // auth / cuentas
   login,
-  logout,
   changePassword,
   getAllUsers,
   createUser,
@@ -3174,15 +2789,5 @@ module.exports = {
   // biometría
   getBiometricSettings,
   saveFingerprint,
-  clearFingerprint,
-  uploadLogo,
-  getEmployeeBenefitSettings,
-  // roles y permisos
-  getRoles,
-  createRole,
-  updateRole,
-  removeRole,
-  getRolePermissions,
-  setRolePermissions,
-  getUserPermissions
+  clearFingerprint
 };

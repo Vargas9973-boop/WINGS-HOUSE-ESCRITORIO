@@ -213,3 +213,7 @@ contextBridge.exposeInMainWorld('biometricAPI', {
   enroll: (employeeId) => call('biometric:enroll', employeeId),
   identify: () => call('biometric:identify')
 });
+
+contextBridge.exposeInMainWorld('sentryAPI', {
+  triggerTestError: () => call('sentry:test')
+});

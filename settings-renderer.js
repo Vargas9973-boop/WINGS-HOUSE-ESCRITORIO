@@ -84,6 +84,25 @@ document.getElementById('btn-test-biometric').addEventListener('click', async ()
 });
 
 // ==========================================================================
+// DIAGNÓSTICO — dispara un error real en el proceso principal (sentry:test,
+// ver main.js/preload.js) para verificar que llega a sentry.io/issues/.
+// ==========================================================================
+document.getElementById('btn-test-sentry').addEventListener('click', async () => {
+  const resultEl = document.getElementById('sentry-test-result');
+  resultEl.className = 'status-indicator';
+  resultEl.textContent = 'Enviando...';
+  try {
+    await window.sentryAPI.triggerTestError();
+    // No debería llegar aquí: el canal siempre lanza WINGS TEST ERROR.
+    resultEl.className = 'status-indicator connected';
+    resultEl.textContent = '● Enviado.';
+  } catch (err) {
+    resultEl.className = 'status-indicator connected';
+    resultEl.textContent = '● Error de prueba enviado a Sentry (WINGS TEST ERROR).';
+  }
+});
+
+// ==========================================================================
 // ALERTA DE SONIDO — preferencia local (localStorage), no viaja a Supabase:
 // cada computadora/estación decide su propio volumen y si suena o no.
 // ==========================================================================

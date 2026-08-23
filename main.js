@@ -13,7 +13,11 @@ const fs = require('fs');
 const { SENTRY_DSN } = require('./sentryConfig');
 if (SENTRY_DSN) {
   const Sentry = require('@sentry/electron/main');
-  Sentry.init({ dsn: SENTRY_DSN });
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    tracesSampleRate: 1.0,
+    release: `wings-house@${app.getVersion()}`
+  });
 }
 
 const { autoUpdater } = require('electron-updater');
@@ -1119,6 +1123,18 @@ safeHandle('print:ticket', async (saleId) => {
 safeHandle('printer:test', async () => {
   const settings = await db.getAllSettings();
   return printTestTicket(settings);
+});
+
+// Botón de prueba en Ajustes -> Diagnóstico: dispara un error real hacia
+// Sentry (captureException explícito, ya que ipcMain.handle atrapa el
+// throw y lo convierte en respuesta IPC antes de que llegue al manejador
+// global de excepciones del proceso).
+safeHandle('sentry:test', () => {
+  const err = new Error('WINGS TEST ERROR');
+  if (SENTRY_DSN) {
+    require('@sentry/electron/main').captureException(err);
+  }
+  throw err;
 });
 }
 // Abre una ventana visible con el reporte completo y despliega el diálogo de
