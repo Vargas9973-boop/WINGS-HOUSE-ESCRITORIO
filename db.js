@@ -114,8 +114,16 @@ function isoMondayOf(dateStr) {
 // El resto del catálogo/inventario/ajustes ya se siembra desde el script SQL
 // (supabase_schema.sql) porque no necesita hashing en Node.
 // ==========================================================================
+// users_table_row_count / seed_default_user (RPC, SECURITY DEFINER) --
+// esto corre en CADA arranque, antes de cualquier login (ver init() más
+// abajo), así que va siempre como anon. Desde que `users` es
+// SELECT/INSERT solo para authenticated (20260822120000), un select/
+// insert directo aquí truena contra RLS en cada arranque de una
+// instalación que ya tiene usuarios -- las RPC bypasean eso, y
+// seed_default_user() re-chequea "¿ya hay usuarios?" del lado del
+// servidor, así que sigue siendo no-op para cualquier instalación real.
 async function seedUsersIfEmpty() {
-  const { count, error } = await supabase.from('users').select('id', { count: 'exact', head: true });
+  const { data: count, error } = await supabase.rpc('users_table_row_count');
   must(error, 'No se pudo verificar la tabla de usuarios');
   if (count && count > 0) return;
 
@@ -125,18 +133,19 @@ async function seedUsersIfEmpty() {
     { username: 'cajero2', display_name: 'Cajero 2', role: 'cajero', password: 'cajero123' },
     { username: 'empleado', display_name: 'Empleado', role: 'empleado', password: 'empleado123' }
   ];
-  const rows = accounts.map((acc) => {
+  const branchId = getCurrentBranchId();
+  for (const acc of accounts) {
     const { salt, hash } = makeCredentials(acc.password);
-    return {
-      username: acc.username,
-      name: acc.display_name,
-      role: acc.role,
-      password_hash: hash,
-      password_salt: salt
-    };
-  });
-  const { error: insErr } = await supabase.from('users').insert(rows);
-  must(insErr, 'No se pudieron crear las cuentas iniciales');
+    const { error: seedErr } = await supabase.rpc('seed_default_user', {
+      p_username: acc.username,
+      p_name: acc.display_name,
+      p_role: acc.role,
+      p_password_hash: hash,
+      p_password_salt: salt,
+      p_branch_id: branchId
+    });
+    must(seedErr, 'No se pudieron crear las cuentas iniciales');
+  }
 }
 
 async function init() {
@@ -3031,6 +3040,18 @@ module.exports = {
   setCurrentBranchId,
   getAllBranches,
   subscribeToNewSales,
+  // exportadas solo para tests/*.test.js (lógica pura, sin red) -- no las
+  // usa main.js
+  localDateStr,
+  getWeekRange,
+  isoMondayOf,
+  normalizeStock,
+  mapCartItems,
+  faltaDeductionDivisor,
+  saleHistoryTipo,
+  normalizeHistoryDate,
+  localDayStartUtcIso,
+  localDayEndUtcIso,
   // auth / cuentas
   login,
   logout,

@@ -9,10 +9,12 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
+    "test": "node --test tests/*.test.js",
     "test:mem": "node scripts/memory-leak-test.js",
     "test:stability": "node scripts/stability-test.js"
   },
   "dependencies": {
+    "@sentry/electron": "^7.17.0",
     "@supabase/supabase-js": "^2.39.0",
     "dotenv": "^16.6.1",
     "electron-log": "^5.4.4",
@@ -40,7 +42,9 @@
       {
         "from": ".",
         "to": ".",
-        "filter": ["config.json"]
+        "filter": [
+          "config.json"
+        ]
       }
     ],
     "publish": [

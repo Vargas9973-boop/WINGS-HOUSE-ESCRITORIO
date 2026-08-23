@@ -1,6 +1,21 @@
 const { app, BrowserWindow, ipcMain, dialog, Notification, Menu, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// Sentry se inicializa lo antes posible (antes de cualquier otro require)
+// para poder capturar errores incluso durante el arranque. Sin DSN
+// configurado (SENTRY_DSN en .env/config.json, ver sentryConfig.js) no
+// hace nada -- una instalación sin monitoreo configurado sigue
+// funcionando exactamente igual que antes de esto. Cubre el proceso
+// PRINCIPAL (main.js/db.js, donde vive casi toda la lógica real) --
+// los procesos de renderer (preload.js, kds/, etc.) no están cubiertos
+// todavía, queda como trabajo aparte.
+const { SENTRY_DSN } = require('./sentryConfig');
+if (SENTRY_DSN) {
+  const Sentry = require('@sentry/electron/main');
+  Sentry.init({ dsn: SENTRY_DSN });
+}
+
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 autoUpdater.logger = log;

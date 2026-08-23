@@ -1,4 +1,5 @@
 {
   "supabaseUrl": "https://TU-PROYECTO.supabase.co",
-  "supabaseAnonKey": "TU-ANON-KEY-PUBLICABLE"
+  "supabaseAnonKey": "TU-ANON-KEY-PUBLICABLE",
+  "sentryDsn": "https://TU-DSN@oXXXXXX.ingest.sentry.io/YYYYYY"
 }
