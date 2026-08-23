@@ -131,9 +131,6 @@ async function seedUsersIfEmpty() {
       username: acc.username,
       name: acc.display_name,
       role: acc.role,
-      // Columna legacy NOT NULL: se mantiene poblada por compatibilidad con
-      // el esquema real de Supabase; la autenticación real usa password_hash.
-      password: acc.password,
       password_hash: hash,
       password_salt: salt
     };
@@ -235,10 +232,7 @@ async function getUserPermissions(userId) {
 async function changePassword(userId, newPassword) {
   if (!newPassword || newPassword.length < 4) throw new Error('La contraseña debe tener al menos 4 caracteres.');
   const { salt, hash } = makeCredentials(newPassword);
-  // La columna legacy 'password' es NOT NULL en Supabase; se mantiene en
-  // sincronía con el hash (no se guarda en texto plano) para no violar la
-  // restricción y para que no quede una contraseña anterior obsoleta ahí.
-  const { error } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', userId).eq('branch_id', getCurrentBranchId());
+  const { error } = await supabase.from('users').update({ password_hash: hash, password_salt: salt }).eq('id', userId).eq('branch_id', getCurrentBranchId());
   must(error, 'No se pudo cambiar la contraseña');
   return true;
 }
@@ -288,9 +282,6 @@ async function createUser(data) {
       name: data.display_name || username,
       role: roleText,
       role_id: roleId,
-      // Columna legacy NOT NULL en Supabase; se rellena con el hash (no en
-      // texto plano) para no violar la restricción sin exponer la contraseña.
-      password: hash,
       password_hash: hash,
       password_salt: salt,
       active: data.active !== false,
@@ -314,7 +305,7 @@ async function updateUser(id, data) {
   must(error, 'No se pudo actualizar la cuenta');
   if (data.password) {
     const { salt, hash } = makeCredentials(data.password);
-    const { error: pwErr } = await supabase.from('users').update({ password: hash, password_hash: hash, password_salt: salt }).eq('id', id).eq('branch_id', getCurrentBranchId());
+    const { error: pwErr } = await supabase.from('users').update({ password_hash: hash, password_salt: salt }).eq('id', id).eq('branch_id', getCurrentBranchId());
     must(pwErr, 'No se pudo actualizar la contraseña');
   }
   const { data: row, error: selErr } = await supabase
