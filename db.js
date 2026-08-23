@@ -49,6 +49,35 @@ function getCurrentBranchId() {
   return _currentBranchId;
 }
 
+// Secreto por sucursal para el único read que corre sin sesión (KDS "sin
+// login", ver 20260822190000_kds_secret_hotfix.sql) -- a diferencia de
+// branchId, es opcional: una instalación normal (con cajero logueado) no
+// lo necesita. null es un valor válido, no un error -- getKdsOrders() ya
+// falla del lado del servidor (RPC) si hace falta y no está configurado.
+let _currentKdsSecret = null;
+
+function setCurrentKdsSecret(secret) {
+  _currentKdsSecret = secret || null;
+}
+
+function getCurrentKdsSecret() {
+  return _currentKdsSecret;
+}
+
+// Llamada una vez, justo después de login() (sesión real ya establecida),
+// para autocompletar branch-config.json si le falta kdsSecret -- ver
+// get_branch_kds_secret en 20260822190000_kds_secret_hotfix.sql. Antes
+// esto se documentaba como paso manual porque no existía ninguna sesión
+// real desde la que llamarlo; ya no hace falta el paso manual.
+async function fetchBranchKdsSecret(branchId) {
+  const { data, error } = await supabase.rpc('get_branch_kds_secret', { p_branch_id: branchId });
+  if (error) {
+    console.error('No se pudo obtener el secreto de KDS:', error.message);
+    return null;
+  }
+  return data || null;
+}
+
 // Usada solo por main.js durante el arranque, ANTES de que haya un
 // currentBranchId, para poder resolverlo (bootstrap automático si solo hay
 // una sucursal en la base, o listado para que el admin elija si hay más de
@@ -149,47 +178,63 @@ async function init() {
 // ==========================================================================
 // 1. AUTENTICACIÓN Y CUENTAS
 // ==========================================================================
+// login() ya no verifica el password ni lee password_hash/salt del lado del
+// cliente -- eso vive en la Edge Function `login` (supabase/functions/login),
+// server-side, junto al service_role. Se manda username+password+branchId
+// (cada instalación de escritorio sirve UNA sucursal fija, ver
+// setCurrentBranchId), y si la Edge Function confirma que son válidos, se
+// establece la sesión real que devuelve (auth.setSession) para que de ahí
+// en adelante supabase.auth.uid() sea real en cada request -- prerequisito
+// para que current_branch_id()/current_visible_branch_ids() (de las que
+// dependen todas las policies de RLS y los guards de Fase 2A/2B) resuelvan
+// a algo distinto de NULL. Mismo patrón que wing-house-web/Login.jsx, que
+// ya lo hacía -- este archivo se había quedado con la versión vieja
+// (verificación local contra password_hash) pese a que el commit que
+// agregó esto decía haberlo cambiado aquí también.
+async function invokeLoginFunction(body) {
+  return supabase.functions.invoke('login', { body });
+}
+
 async function login(username, password) {
   const cleanUsername = String(username || '').trim().toLowerCase();
+  const body = {
+    identifier: cleanUsername,
+    password: password || '',
+    branchId: getCurrentBranchId()
+  };
 
-  const { data: user, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('username', cleanUsername)
-    .eq('branch_id', getCurrentBranchId())
-    .eq('active', true)
-    .maybeSingle();
+  // La Edge Function ocasionalmente falla en el primer intento después de
+  // estar inactiva (cold start) y funciona al reintentar de inmediato --
+  // mismo mitigation que wing-house-web/Login.jsx. Solo se reintenta si NO
+  // es un 401 (usuario/contraseña incorrectos es determinístico).
+  let { data, error } = await invokeLoginFunction(body);
+  if (error && error.context && error.context.status !== 401) {
+    ({ data, error } = await invokeLoginFunction(body));
+  }
 
-  must(error, 'Error al consultar el usuario en Supabase');
-  if (!user) throw new Error('Usuario o contraseña incorrectos.');
+  if (error || !data || !data.session || !data.profile) {
+    throw new Error('Usuario o contraseña incorrectos.');
+  }
 
-  if (user.password_hash && user.password_salt) {
-    const hash = hashPassword(password || '', user.password_salt);
-    if (hash !== user.password_hash) {
-      throw new Error('Usuario o contraseña incorrectos.');
-    }
-  } else if (typeof user.password === 'string') {
-    if (user.password !== String(password || '')) {
-      throw new Error('Usuario o contraseña incorrectos.');
-    }
-
-    const { salt, hash } = makeCredentials(password || '');
-    const { error: migrateErr } = await supabase
-      .from('users')
-      .update({ password_hash: hash, password_salt: salt })
-      .eq('id', user.id);
-
-    must(migrateErr, 'No se pudo actualizar la contraseña del usuario');
-  } else {
-    throw new Error('La cuenta no tiene una contraseña configurada correctamente.');
+  const { error: sessionErr } = await supabase.auth.setSession({
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token
+  });
+  if (sessionErr) {
+    throw new Error('Ocurrió un error inesperado al conectar.');
   }
 
   return {
-    id: user.id,
-    username: user.username,
-    displayName: user.name,
-    role: user.role
+    id: data.profile.id,
+    username: data.profile.username,
+    displayName: data.profile.displayName,
+    role: data.profile.role
   };
+}
+
+async function logout() {
+  await supabase.auth.signOut();
+  return true;
 }
 
 async function changePassword(userId, newPassword) {
@@ -1285,13 +1330,15 @@ const KDS_TIMESTAMP_COLUMN = {
 // las canceladas (canceladas antes de cocinar no deben seguir pidiendo que
 // se cocinen) aunque su kds_status nunca se haya tocado.
 async function getKdsOrders() {
-  const { data: sales, error } = await supabase
-    .from('sales')
-    .select('id, table_number, client_type, folio, status, created_at, kds_status, kds_started_at, kds_ready_at, is_delivery, delivery_fee, driver_name, total')
-    .eq('branch_id', getCurrentBranchId())
-    .neq('kds_status', 'entregada')
-    .neq('status', 'cancelada')
-    .order('created_at', { ascending: true });
+  // Antes leía `sales` directo (anon) -- desde 20260822190000_kds_secret_hotfix.sql
+  // esa policy ya no existe para anon (fase 1 de RLS la cerró a
+  // `authenticated`), y aunque existiera, esta instalación puede no tener
+  // sesión (TV de cocina sin login). El RPC valida el secreto de sucursal
+  // en vez de confiar en el branch_id que mandamos.
+  const { data: sales, error } = await supabase.rpc('get_kds_orders', {
+    p_branch_id: getCurrentBranchId(),
+    p_kds_secret: getCurrentKdsSecret()
+  });
   must(error, 'No se pudieron obtener las órdenes de cocina');
   if (!sales || sales.length === 0) return [];
 
@@ -2666,10 +2713,14 @@ module.exports = {
   makeCredentials,
   getCurrentBranchId,
   setCurrentBranchId,
+  getCurrentKdsSecret,
+  setCurrentKdsSecret,
+  fetchBranchKdsSecret,
   getAllBranches,
   subscribeToNewSales,
   // auth / cuentas
   login,
+  logout,
   changePassword,
   getAllUsers,
   createUser,

@@ -478,6 +478,14 @@ app.whenReady().then(async () => {
   try {
     const branchId = await resolveBranchId();
     db.setCurrentBranchId(branchId);
+
+    // Secreto de KDS (ver 20260822190000_kds_secret_hotfix.sql): mismo
+    // archivo que branchId, campo opcional -- instalaciones sin TV de
+    // cocina sin login no lo necesitan. Se instala a mano (por ahora,
+    // sin UI): agregar "kdsSecret" a branch-config.json con el valor que
+    // devuelve get_branch_kds_secret(branchId) ya logueado como admin.
+    const branchConfig = await readBranchConfig();
+    db.setCurrentKdsSecret(branchConfig && branchConfig.kdsSecret);
   } catch (err) {
     console.error('No se pudo resolver la sucursal de esta instalación:', err.message);
     dialog.showErrorBox(
@@ -647,6 +655,26 @@ function registerIpcHandlers() {
   safeHandle('auth:login', async (username, password) => {
     const session = await db.login(username, password);
     currentSession = session;
+
+    // Onboarding del secreto de KDS (ver 20260822190000_kds_secret_hotfix.sql
+    // y db.js::fetchBranchKdsSecret): ya hay sesión real de Supabase Auth
+    // (db.login() la estableció arriba), así que si branch-config.json
+    // todavía no tiene kdsSecret, se autocompleta aquí -- ya no hace falta
+    // el paso manual documentado antes. No bloquea el login si falla (KDS
+    // sin login es una feature opcional, no algo de lo que dependa vender).
+    try {
+      const cfg = (await readBranchConfig()) || {};
+      if (!cfg.kdsSecret) {
+        const secret = await db.fetchBranchKdsSecret(db.getCurrentBranchId());
+        if (secret) {
+          await writeBranchConfig({ ...cfg, kdsSecret: secret });
+          db.setCurrentKdsSecret(secret);
+        }
+      }
+    } catch (err) {
+      console.error('No se pudo autocompletar el secreto de KDS:', err.message);
+    }
+
     return currentSession;
   });
 
