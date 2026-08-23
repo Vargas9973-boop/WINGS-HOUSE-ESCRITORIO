@@ -2190,8 +2190,16 @@ async function setPayrollBonus(payload) {
   return data;
 }
 
+// payroll_weeks (bono semanal, set_payroll_bonus) y payroll_history
+// (snapshot real del cierre, closePayrollWeek/upsert_payroll_history) son
+// tablas distintas -- esta función quedó apuntando a la primera desde su
+// creación, así que nunca mostraba el desglose real de un cierre (faltas,
+// deducción por faltas, beneficio usado, total pagado). Sin caller real en
+// ningún renderer hoy (confirmado por grep), pero corregido para que quede
+// listo para cuando se conecte una pantalla de historial real. De paso se
+// agrega el filtro de branch_id que tampoco tenía.
 async function getPayrollHistory(filters = {}) {
-  let query = supabase.from('payroll_weeks').select('*');
+  let query = supabase.from('payroll_history').select('*').eq('branch_id', getCurrentBranchId());
   if (filters.weekFrom) query = query.gte('week_start', filters.weekFrom);
   if (filters.weekTo) query = query.lte('week_start', filters.weekTo);
   query = query.order('week_start', { ascending: false }).order('employee_name', { ascending: true });
