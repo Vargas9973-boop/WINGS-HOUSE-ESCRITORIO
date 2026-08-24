@@ -23,6 +23,14 @@ async function loadSettings() {
   }
   document.getElementById('set-payroll-payday').value = String(paydayNumber);
 
+  // No todos los negocios cuentan 6 días laborales (uno de descanso) --
+  // algunos cuentan los 7 días de la semana, así que el divisor de la
+  // deducción por falta (sueldo / días laborales) no puede ser fijo.
+  let workDaysPerWeek = 6;
+  const parsedWorkDays = Number(settings.payroll_work_days_per_week);
+  if (parsedWorkDays === 6 || parsedWorkDays === 7) workDaysPerWeek = parsedWorkDays;
+  document.getElementById('set-payroll-work-days').value = String(workDaysPerWeek);
+
   if (settings.logo_url) {
     document.getElementById('set-logo-preview').src = settings.logo_url;
   }
@@ -349,6 +357,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     ticket_width: document.getElementById('set-ticket-width').value,
     printer_enabled: document.getElementById('set-printer-enabled').checked ? 'true' : 'false',
     payroll_payday: JSON.stringify({ day: PAYROLL_DAY_NAMES[paydayNumber], day_number: paydayNumber }),
+    payroll_work_days_per_week: document.getElementById('set-payroll-work-days').value === '7' ? '7' : '6',
     biometric_enabled: JSON.stringify({
       enabled: document.getElementById('set-biometric-enabled').checked,
       model: document.getElementById('set-biometric-model').value

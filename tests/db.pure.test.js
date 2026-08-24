@@ -168,10 +168,6 @@ test('localDayStartUtcIso / localDayEndUtcIso', async (t) => {
   });
 });
 
-test('faltaDeductionDivisor', () => {
-  assert.equal(db.faltaDeductionDivisor(), 6);
-});
-
 test('setCurrentBranchId / getCurrentBranchId', async (t) => {
   await t.test('rechaza valores inválidos', () => {
     assert.throws(() => db.setCurrentBranchId(0));

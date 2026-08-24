@@ -108,11 +108,12 @@
         <div class="panel-title">Nómina</div>
         <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
           La semana laboral se calcula automáticamente: termina el día de pago seleccionado
-          y empieza 7 días antes (domingo se asume descanso, sin contar como falta).
-          El sueldo base de cada empleado se edita en Asistencia → Empleados.
+          y empieza 7 días antes. Si el negocio cuenta 6 días laborales, el día siguiente al
+          de pago se asume descanso y no cuenta como falta; si cuenta 7, todos los días de la
+          semana exigen asistencia. El sueldo base de cada empleado se edita en Asistencia → Empleados.
         </p>
         <div class="form-grid">
-          <div class="field" style="grid-column: 1 / -1;">
+          <div class="field">
             <label>Día de pago</label>
             <select id="set-payroll-payday">
               <option value="1">Lunes</option>
@@ -122,6 +123,13 @@
               <option value="5">Viernes</option>
               <option value="6">Sábado</option>
               <option value="0">Domingo</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Días laborales por semana</label>
+            <select id="set-payroll-work-days">
+              <option value="6">6 días (uno de descanso)</option>
+              <option value="7">7 días</option>
             </select>
           </div>
         </div>

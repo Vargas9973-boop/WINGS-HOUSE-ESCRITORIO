@@ -1801,6 +1801,67 @@ async function createWaste(data) {
   return row;
 }
 
+// Consumo cubierto por el beneficio diario de empleado ($100), leído desde
+// employee_consumption vía RPC (la tabla no es legible directo, ver
+// getEmployeeDailyConsumption) -- para mostrarlo en Merma como una
+// categoría de solo lectura ("realmente es una merma ese consumo, igual
+// que Consumo Jefes", bug reportado 2026-08-23). dateFrom/dateTo son
+// opcionales (undefined = todo el histórico, igual que getAllWaste sin
+// filtro).
+//
+// El "costo" de cada fila se calcula igual que Food Cost en
+// computeProfitability: costo de receta si el producto es de receta (stock
+// NULL), o su cost_per_unit propio si es directo -- multiplicado por la
+// fracción de esa línea que realmente cubrió el beneficio (benefit_amount
+// / total_amount), no por el precio de venta completo. Si el producto no
+// se pudo resolver (ref_id nulo -- ventas de antes de este fix, o
+// promos/combos sin costo de receta), se usa benefit_amount como estimado
+// y se marca costIsEstimated para que la UI lo distinga.
+async function getEmployeeBenefitConsumptionReport(dateFrom, dateTo) {
+  const [rows, allProducts, recipeCostByProduct] = await Promise.all([
+    supabase.rpc('get_employee_benefit_consumption', {
+      p_branch_id: getCurrentBranchId(),
+      p_from: dateFrom || null,
+      p_to: dateTo || null
+    }).then(({ data, error }) => {
+      must(error, 'No se pudo obtener el consumo por beneficio de empleado');
+      return data || [];
+    }),
+    getAllProducts(),
+    getAllRecipeCosts()
+  ]);
+
+  const productsById = new Map((allProducts || []).map((p) => [p.id, p]));
+  const foodCostOf = (product) => {
+    if (!product) return null;
+    if (product.stock == null) {
+      const recipeCost = recipeCostByProduct[product.id];
+      return recipeCost != null ? recipeCost : null;
+    }
+    return product.cost_per_unit != null ? Number(product.cost_per_unit) : null;
+  };
+
+  return rows.map((r) => {
+    const totalAmount = Number(r.total_amount) || 0;
+    const benefitAmount = Number(r.benefit_amount) || 0;
+    const fraction = totalAmount > 0 ? benefitAmount / totalAmount : 0;
+    const unitCost = r.ref_id != null ? foodCostOf(productsById.get(r.ref_id)) : null;
+    const cost = unitCost != null ? unitCost * (Number(r.quantity) || 0) * fraction : benefitAmount;
+    return {
+      id: r.id,
+      created_at: r.sale_created_at,
+      employee_name: r.employee_name,
+      item_name: r.item_name,
+      quantity: r.quantity,
+      unit: 'pza',
+      tipo: 'beneficio_empleado',
+      reason: `Beneficio diario -- ${r.employee_name}`,
+      cost,
+      costIsEstimated: unitCost == null
+    };
+  });
+}
+
 // ==========================================================================
 // 8. COSTOS
 // ==========================================================================
@@ -2455,17 +2516,12 @@ async function getPayrollSettings() {
       // valor legado/corrupto: se usa el default (sábado)
     }
   }
-  return { day, dayNumber };
-}
-
-// Semana laboral = 6 días hábiles (todos menos el día siguiente al de pago,
-// que es el descanso). Ej. payday=sábado -> semana domingo-sábado, descanso
-// implícito ninguno adicional; el divisor de tarifa diaria es 6 porque el
-// día de pago (o el día siguiente, según el negocio) no se exige asistencia.
-// Aquí se asume que el único día sin asistencia esperada es el que sigue al
-// de pago (domingo si payday=sábado).
-function faltaDeductionDivisor() {
-  return 6;
+  // No todos los negocios cuentan 6 días laborales (uno de descanso) --
+  // algunos cuentan los 7 días de la semana, así que ni el día de descanso
+  // ni el divisor de la deducción por falta pueden ser fijos (configurable
+  // en Ajustes → Nómina).
+  const workDaysPerWeek = Number(settings.payroll_work_days_per_week) === 7 ? 7 : 6;
+  return { day, dayNumber, workDaysPerWeek };
 }
 
 async function getEmployeesWithAttendanceHistory() {
@@ -2479,11 +2535,12 @@ async function getPayrollData(weekStart, weekEnd) {
     .from('employees').select('*').eq('branch_id', getCurrentBranchId()).eq('active', true).order('name');
   must(empErr, 'No se pudieron obtener los empleados');
 
-  // Bono acreditado y crédito semanal por excedente viven en payroll_weeks /
-  // employee_weekly_credit, ambas indexadas por semana ISO lunes-domingo
-  // (ver isoMondayOf); weekStart/weekEnd aquí son el rango que se muestra en
-  // pantalla (respeta el día de pago configurado) y se usan tal cual para
-  // faltas y beneficio $100, que sí son consultas por rango de timestamp.
+  const payrollSettings = await getPayrollSettings();
+
+  // El bono acreditado vive en payroll_weeks, indexada por semana ISO
+  // lunes-domingo (ver isoMondayOf) -- se escribe y se lee siempre con
+  // exactamente el mismo weekEnd visible, así que ese bucket es
+  // autoconsistente y no tiene el problema de abajo.
   const bonusWeekStart = isoMondayOf(weekEnd);
 
   const { data: bonusRecords, error: bonusErr } = await supabase
@@ -2493,9 +2550,21 @@ async function getPayrollData(weekStart, weekEnd) {
     .eq('week_start', bonusWeekStart);
   must(bonusErr, 'No se pudo obtener el bono acreditado de la semana');
 
+  // El crédito semanal por excedente, en cambio, lo escribe process_sale en
+  // employee_weekly_credit bajo `date_trunc('week', HOY)` (semana ISO fija,
+  // sin importar el día de pago configurado) -- un bucket DISTINTO al que
+  // usa la pantalla (isoMondayOf(weekEnd), anclado al día de pago). Ambos
+  // solo coinciden cuando el día de pago es domingo; con cualquier otro día
+  // de pago, el primer día de la semana visible (el día siguiente al pago
+  // anterior) cae en la semana ISO ANTERIOR a la de weekEnd, y ese crédito
+  // desaparecía de la pantalla (bug reproducido en vivo 2026-08-23:
+  // "EMPLEADO PRUEBA", $54 de excedente a crédito invisibles). En vez de
+  // traducir semanas, get_payroll_range_credit (SECURITY DEFINER) resume
+  // employee_consumption filtrando por el rango de fechas EXACTO que ya se
+  // muestra en pantalla -- inmune a cualquier día de pago configurado.
   const { data: creditRows, error: credErr } = await supabase.rpc(
-    'get_payroll_week_credit',
-    { p_branch_id: getCurrentBranchId(), p_week_start: bonusWeekStart }
+    'get_payroll_range_credit',
+    { p_branch_id: getCurrentBranchId(), p_date_from: weekStart, p_date_to: weekEnd }
   );
   must(credErr, 'No se pudo obtener el crédito semanal de empleados');
 
@@ -2547,14 +2616,25 @@ async function getPayrollData(weekStart, weekEnd) {
     benefitByEmployee[s.employee_id] = (benefitByEmployee[s.employee_id] || 0) + used;
   });
 
+  // Día de descanso implícito = el día siguiente al de pago (mismo criterio
+  // que weekStartDay en getWeekRange), y SOLO existe si el negocio cuenta 6
+  // días laborales -- si cuenta 7 (payroll_work_days_per_week=7), no hay
+  // descanso automático y cualquier día sin asistencia es una falta posible.
+  // Antes esto estaba fijo a "domingo", que solo era correcto por
+  // coincidencia con el default de payday=sábado; con cualquier otro día de
+  // pago configurado, el descanso real (p.ej. jueves si se paga miércoles)
+  // no se respetaba.
+  const restDay = payrollSettings.workDaysPerWeek === 6
+    ? (payrollSettings.dayNumber + 1) % 7
+    : null;
+
   const today = localDateStr(new Date());
   const workDays = [];
   const cursor = new Date(`${weekStart}T00:00:00`);
   const endDate = new Date(`${weekEnd}T00:00:00`);
   while (cursor <= endDate) {
     const iso = localDateStr(cursor);
-    // Domingo (0) se asume descanso: no cuenta como falta si no hay asistencia.
-    if (cursor.getDay() !== 0 && iso <= today) workDays.push(iso);
+    if (cursor.getDay() !== restDay && iso <= today) workDays.push(iso);
     cursor.setDate(cursor.getDate() + 1);
   }
 
@@ -2564,14 +2644,19 @@ async function getPayrollData(weekStart, weekEnd) {
     const bonusCredited = !!bonusByEmployee[emp.id];
     const credit = creditByEmployee[emp.id];
     const creditoSemanal = Number(credit?.credit_amount) || 0;
+    // Efectivo excedente = el empleado ya pagó en caja el excedente sobre el
+    // beneficio diario -- ese dinero ya entró, no es una deuda de nómina.
+    // Es puramente informativo (se muestra en pantalla) y NO participa en
+    // el cálculo de totalAPagar; solo creditoSemanal (lo que se difirió a
+    // crédito, sin cobrar) se descuenta.
     const efectivoExcedente = Number(credit?.paid_amount) || 0;
     const tieneHistorialAsistencia = employeesWithAttendanceHistory.has(emp.id);
     const diasAsistidos = attByEmployee[emp.id] || new Set();
     const faltas = tieneHistorialAsistencia ? workDays.filter((d) => !diasAsistidos.has(d)).length : 0;
-    const deduccionFaltas = Math.round((salary / faltaDeductionDivisor()) * faltas * 100) / 100;
+    const deduccionFaltas = Math.round((salary / payrollSettings.workDaysPerWeek) * faltas * 100) / 100;
     const beneficioUsado = benefitByEmployee[emp.id] || 0;
     const totalAPagar = Math.max(
-      salary + (bonusCredited ? bonoSemanal : 0) - creditoSemanal - efectivoExcedente - deduccionFaltas,
+      salary + (bonusCredited ? bonoSemanal : 0) - creditoSemanal - deduccionFaltas,
       0
     );
 
@@ -2664,12 +2749,18 @@ async function getPayrollDetail(employeeName, weekStart, weekEnd) {
       ? new Set((attendance || []).map((a) => localDateStr(new Date(a.timestamp))))
       : null;
     if (diasAsistidos) {
+      // Mismo criterio de día de descanso configurable que getPayrollData
+      // (ver comentario ahí) -- antes fijo a "domingo".
+      const payrollSettings = await getPayrollSettings();
+      const restDay = payrollSettings.workDaysPerWeek === 6
+        ? (payrollSettings.dayNumber + 1) % 7
+        : null;
       const today = localDateStr(new Date());
       const cursor = new Date(`${weekStart}T00:00:00`);
       const endDate = new Date(`${weekEnd}T00:00:00`);
       while (cursor <= endDate) {
         const iso = localDateStr(cursor);
-        if (cursor.getDay() !== 0 && iso <= today && !diasAsistidos.has(iso)) faltasDias.push(iso);
+        if (cursor.getDay() !== restDay && iso <= today && !diasAsistidos.has(iso)) faltasDias.push(iso);
         cursor.setDate(cursor.getDate() + 1);
       }
     }
@@ -2690,11 +2781,12 @@ async function closePayrollWeek(weekStart, weekEnd, closedBy) {
     employee_id: r.employeeId,
     employee_name: r.employeeName,
     sueldo_base: r.sueldoBase,
-    // payroll_history no tiene columnas separadas para bono/efectivo
-    // excedente; 'creditos' guarda aquí el total de ambas deducciones
-    // semanales (crédito de consumo + efectivo excedente), consistente con
-    // total_pagado ya neto de todo.
-    creditos: r.creditoSemanal + r.efectivoExcedente,
+    // payroll_history no tiene columna separada para bono; 'creditos' guarda
+    // solo el crédito semanal real (lo diferido, sin cobrar), consistente
+    // con total_pagado. El efectivo excedente NO se incluye aquí -- ya se
+    // cobró en caja al momento de la venta, es informativo, no es una
+    // deducción de nómina.
+    creditos: r.creditoSemanal,
     faltas: r.faltas,
     deduccion_faltas: r.deduccionFaltas,
     beneficio_usado: r.beneficioUsado,
@@ -3130,7 +3222,6 @@ module.exports = {
   isoMondayOf,
   normalizeStock,
   mapCartItems,
-  faltaDeductionDivisor,
   saleHistoryTipo,
   normalizeHistoryDate,
   localDayStartUtcIso,
@@ -3216,6 +3307,7 @@ module.exports = {
   // merma
   getAllWaste,
   createWaste,
+  getEmployeeBenefitConsumptionReport,
   // costos
   getAllCosts,
   createCost,

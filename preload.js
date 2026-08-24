@@ -62,7 +62,8 @@ contextBridge.exposeInMainWorld('db', {
   },
   waste: {
     getAll: (filters) => call('waste:getAll', filters),
-    create: (data) => call('waste:create', data)
+    create: (data) => call('waste:create', data),
+    getEmployeeBenefitConsumption: (dateFrom, dateTo) => call('waste:getEmployeeBenefitConsumption', dateFrom, dateTo)
   },
   costs: {
     getAll: (filters) => call('costs:getAll', filters),

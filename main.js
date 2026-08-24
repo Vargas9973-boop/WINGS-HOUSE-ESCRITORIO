@@ -261,7 +261,12 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      // sandbox:false -- el preload necesita require() de Node para módulos
+      // locales (./sentryConfig); sandboxeado (default de Electron >=20),
+      // ese require truena y aborta TODO el script antes de exponer
+      // contextBridge, dejando window.auth/window.db indefinidos.
+      sandbox: false
     }
   });
 
@@ -394,7 +399,8 @@ function createKDSWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'kds', 'kds-preload.js'),
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      sandbox: false
     }
   });
 
@@ -976,6 +982,7 @@ function registerIpcHandlers() {
   // ------------------------------------------------------------------
   safeHandle('waste:getAll', (filters = {}) => db.getAllWaste(filters));
   safeHandle('waste:create', (data) => db.createWaste(data));
+  safeHandle('waste:getEmployeeBenefitConsumption', (dateFrom, dateTo) => db.getEmployeeBenefitConsumptionReport(dateFrom, dateTo));
 
   // ------------------------------------------------------------------
   // COSTOS
@@ -1279,7 +1286,8 @@ function printFullReport(payload) {
       webPreferences: {
         preload: path.join(__dirname, 'report-preload.js'),
         contextIsolation: true,
-        nodeIntegration: false
+        nodeIntegration: false,
+        sandbox: false
       }
     });
 
@@ -1332,7 +1340,8 @@ function printHistoryReport(payload) {
       webPreferences: {
         preload: path.join(__dirname, 'history-print-preload.js'),
         contextIsolation: true,
-        nodeIntegration: false
+        nodeIntegration: false,
+        sandbox: false
       }
     });
 
@@ -1484,7 +1493,8 @@ function printTicketWindow(saleData, settings) {
             webPreferences: {
                 preload: path.join(__dirname, 'ticket-preload.js'),
                 contextIsolation: true,
-                nodeIntegration: false
+                nodeIntegration: false,
+                sandbox: false
             }
         });
 
