@@ -89,6 +89,7 @@
       <section id="tab-modifiers" class="tab-panel" style="display:none;">
         <div class="section-toolbar">
           <h2>Modificadores (salsas)</h2>
+          <button id="btn-new-modifier" class="btn btn-brand">+ Nuevo modificador</button>
         </div>
         <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:14px;">
           Vincula cada salsa con su insumo de inventario e indica cuánto de ese insumo consume una porción, en la
@@ -239,6 +240,40 @@
       <div class="modal-actions">
         <button class="btn btn-outline" id="btn-cancel-promo">Cancelar</button>
         <button class="btn btn-brand" id="btn-save-promo">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modifier-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Nuevo modificador</h2>
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Nombre</label>
+          <input type="text" id="modifier-name" placeholder="Ej. BBQ">
+        </div>
+        <div class="field">
+          <label>Grupo</label>
+          <input type="text" id="modifier-group" placeholder="Salsas" value="Salsas">
+        </div>
+        <div class="field">
+          <label>Insumo vinculado</label>
+          <select id="modifier-inventory">
+            <option value="">Sin vincular</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Cantidad por porción</label>
+          <input type="number" id="modifier-qty" min="0.01" step="0.01" value="60">
+        </div>
+        <div class="field">
+          <label>Precio extra (opcional)</label>
+          <input type="number" id="modifier-price-extra" min="0" step="0.01" placeholder="0.00">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-modifier">Cancelar</button>
+        <button class="btn btn-brand" id="btn-save-modifier">Guardar</button>
       </div>
     </div>
   </div>

@@ -41,6 +41,20 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
+// Sucursal de la que se copian los nombres de salsa (modifiers,
+// group_name='Salsas') para que un tenant nuevo no arranque con el
+// selector de salsa de Ventas vacío -- ver bug 2026-08-29 (ver
+// 20260829020000_create_modifier_rpc.sql). Es la sucursal original de
+// antes de que el catálogo fuera multi-tenant (el "DEFAULT_BRANCH_ID=1"
+// hardcodeado que main.js:86 documenta haber reemplazado), la única que
+// hoy tiene esas 9 salsas cargadas. Solo se copian nombre/grupo/precio
+// extra/cantidad por porción -- NUNCA inventory_id: el insumo de la
+// sucursal 1 no existe en el tenant nuevo (inventory también es por
+// sucursal), así que cada modificador queda "Sin vincular" hasta que el
+// dueño lo ligue a su propio insumo desde Catálogo > Modificadores, igual
+// que ya tiene que hacer para cualquier modificador nuevo.
+const SEED_SAUCES_BRANCH_ID = 1;
+
 const HELP = `
 Onboarding asistido v1 -- da de alta un negocio (tenant) nuevo.
 
@@ -236,6 +250,39 @@ async function main() {
       if (setErr) throw new Error(`No se pudo guardar el ajuste "${s.key}": ${setErr.message}`);
     }
     console.log('✔ Ajustes iniciales guardados (nombre del negocio, colores default)');
+
+    // 8. Salsas iniciales -- copia solo nombre/grupo/precio extra/cantidad
+    // por porción de SEED_SAUCES_BRANCH_ID, sin inventory_id (ver
+    // comentario de la constante). Best-effort: si esa sucursal no existe
+    // en este entorno (p.ej. base de pruebas nueva) o ya no tiene salsas,
+    // no aborta el onboarding -- el dueño puede crearlas a mano desde
+    // Catálogo > Modificadores ("+ Nuevo modificador").
+    const { data: seedModifiers, error: seedErr } = await admin
+      .from('modifiers').select('name, group_name, price_extra, qty_needed')
+      .eq('branch_id', SEED_SAUCES_BRANCH_ID).eq('active', true);
+    if (seedErr) {
+      console.warn(`⚠ No se pudieron leer las salsas de la sucursal ${SEED_SAUCES_BRANCH_ID}: ${seedErr.message}`);
+    } else if (!seedModifiers || seedModifiers.length === 0) {
+      console.warn(`⚠ La sucursal ${SEED_SAUCES_BRANCH_ID} no tiene salsas que copiar.`);
+    } else {
+      const rows = seedModifiers.map((m) => ({
+        name: m.name,
+        group_name: m.group_name,
+        price_extra: m.price_extra,
+        qty_needed: m.qty_needed,
+        is_required: false,
+        is_active: true,
+        active: true,
+        inventory_id: null,
+        branch_id: branch.id
+      }));
+      const { error: insertErr } = await admin.from('modifiers').insert(rows);
+      if (insertErr) {
+        console.warn(`⚠ No se pudieron copiar las salsas: ${insertErr.message}`);
+      } else {
+        console.log(`✔ ${rows.length} salsas copiadas (sin insumo vinculado -- liga cada una desde Catálogo > Modificadores)`);
+      }
+    }
 
     console.log('\n--- Listo ---');
     console.log(`TENANT_ID: ${tenant.id}`);

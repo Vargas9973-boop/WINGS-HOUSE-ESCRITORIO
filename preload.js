@@ -122,6 +122,7 @@ contextBridge.exposeInMainWorld('db', {
   },
   modifiers: {
     list: (groupName) => call('modifiers:list', groupName),
+    create: (data) => call('modifiers:create', data),
     update: (id, data) => call('modifiers:update', id, data)
   },
   productModifierGroups: {

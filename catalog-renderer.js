@@ -148,6 +148,51 @@ async function saveModifierInventory(id) {
   }
 }
 
+function openModifierModal() {
+  document.getElementById('modifier-name').value = '';
+  document.getElementById('modifier-group').value = 'Salsas';
+  document.getElementById('modifier-qty').value = '60';
+  document.getElementById('modifier-price-extra').value = '';
+  const select = document.getElementById('modifier-inventory');
+  select.innerHTML =
+    `<option value="">Sin vincular</option>` +
+    inventoryOptions.map((i) => `<option value="${i.id}">${escapeHtml(i.name)} (${i.stock} ${escapeHtml(i.unit || '')})</option>`).join('');
+  openModal('modifier-modal');
+}
+
+document.getElementById('btn-new-modifier').addEventListener('click', () => openModifierModal());
+document.getElementById('btn-cancel-modifier').addEventListener('click', () => closeModal('modifier-modal'));
+
+document.getElementById('btn-save-modifier').addEventListener('click', async () => {
+  const name = document.getElementById('modifier-name').value.trim();
+  const groupName = document.getElementById('modifier-group').value.trim();
+  const inventoryId = document.getElementById('modifier-inventory').value;
+  const qtyNeeded = document.getElementById('modifier-qty').value;
+  const priceExtra = document.getElementById('modifier-price-extra').value;
+
+  if (!name || !groupName) {
+    toast('Nombre y grupo son obligatorios.', 'error');
+    return;
+  }
+
+  try {
+    await window.db.modifiers.create({
+      name,
+      group_name: groupName,
+      inventory_id: inventoryId || null,
+      qty_needed: qtyNeeded || null,
+      price_extra: priceExtra || null
+    });
+    toast('Modificador creado.', 'success');
+    closeModal('modifier-modal');
+    await loadModifiersData();
+    renderModifiers();
+  } catch (err) {
+    console.error('No se pudo crear el modificador:', err);
+    toast('No se pudo crear el modificador.', 'error');
+  }
+});
+
 const AVAILABILITY_BADGE = {
   rojo: { cls: 'low', label: '🔴 Sin stock' },
   amarillo: { cls: 'warning', label: '🟡 Stock bajo' },

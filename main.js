@@ -933,6 +933,7 @@ function registerIpcHandlers() {
   // MODIFICADORES (salsas) -- ver product_modifier_groups / sale_item_modifiers
   // ------------------------------------------------------------------
   safeHandle('modifiers:list', (groupName) => db.getModifiers(groupName));
+  safeHandle('modifiers:create', (data) => db.createModifier(data));
   safeHandle('modifiers:update', (id, data) => db.updateModifier(id, data));
   safeHandle('productModifierGroups:getAll', () => db.getAllProductModifierGroups());
   safeHandle('productModifierGroups:set', (productId, groupName, enabled, qty) => db.setProductModifierGroup(productId, groupName, enabled, qty));

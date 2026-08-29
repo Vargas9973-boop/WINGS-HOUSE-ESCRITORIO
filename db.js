@@ -1302,6 +1302,19 @@ async function getModifiers(groupName) {
   return filtered.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+async function createModifier(data) {
+  const { data: row, error } = await supabase.rpc('create_modifier', {
+    p_branch_id: getCurrentBranchId(),
+    p_name: data.name,
+    p_group_name: data.group_name,
+    p_inventory_id: data.inventory_id != null && data.inventory_id !== '' ? Number(data.inventory_id) : null,
+    p_price_extra: data.price_extra != null && data.price_extra !== '' ? Number(data.price_extra) : null,
+    p_qty_needed: data.qty_needed != null && data.qty_needed !== '' ? Number(data.qty_needed) : null
+  });
+  must(error, 'No se pudo crear el modificador');
+  return row;
+}
+
 async function updateModifier(id, data) {
   // Cuánto de su insumo consume una porción, en la unidad propia de ese
   // insumo (ver inventory.unit) -- nunca se convierte, igual que
@@ -3271,6 +3284,7 @@ module.exports = {
   comandaCancelTable,
   // modificadores (salsas)
   getModifiers,
+  createModifier,
   updateModifier,
   getAllProductModifierGroups,
   setProductModifierGroup,
