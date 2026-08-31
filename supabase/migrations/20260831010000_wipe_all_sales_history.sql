@@ -1,0 +1,27 @@
+-- Confirmado explícitamente por el usuario (dueño de los 2 tenants): borrar
+-- TODO el historial de ventas existente en ambas sucursales (Marina
+-- Nacional id=1, La Xalapeña id=7) -- eran datos de prueba de una
+-- actualización anterior, no ventas reales de negocio. Mismo patrón que
+-- 20260819080000_cleanup_delivery_flow_test_sales.sql, pero sin filtro de
+-- folio/opened_by: alcance completo, ambos tenants, confirmado vía
+-- AskUserQuestion antes de correr esto.
+--
+-- Verificado antes de escribir esto (introspección real, no adivinado):
+--   - sale_items.sale_id y sale_payments.sale_id son FK ON DELETE CASCADE
+--     hacia sales.id -- se limpian solas al borrar sales.
+--   - sale_item_modifiers.sale_item_id es FK ON DELETE CASCADE hacia
+--     sale_items.id -- también se limpia sola (cascada de cascada).
+--   - payroll_deductions.sale_id es FK ON DELETE NO ACTION hacia sales.id,
+--     pero tiene 0 filas con sale_id no nulo en este momento -- no bloquea
+--     el DELETE. Si en el futuro alguna vez hay filas ahí, este DELETE
+--     fallaría con foreign key violation en vez de corromper nómina
+--     silenciosamente, que es el comportamiento correcto.
+--   - employee_consumption.sale_id no tiene FK (columna suelta) y tiene 0
+--     filas -- se limpia igual por si acaso, no depende del conteo actual.
+--
+-- Deliberadamente FUERA de alcance (no se tocan): cash_cuts/cash_movements
+-- (corte de caja), waste, employee_weekly_credit, payroll_* -- el pedido
+-- fue "historial de ventas", no estos otros libros contables/de nómina que
+-- podrían tener datos reales independientes de las ventas de prueba.
+DELETE FROM public.employee_consumption;
+DELETE FROM public.sales;

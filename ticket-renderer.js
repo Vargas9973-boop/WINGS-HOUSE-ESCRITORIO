@@ -9,7 +9,8 @@ function paymentLabel(method) {
         transferencia: 'Transferencia',
         credito: 'Crédito',
         credito_nomina: 'Crédito Nómina',
-        beneficio_empleado: 'Beneficio Empleado'
+        beneficio_empleado: 'Beneficio Empleado',
+        mixto: 'Pago combinado'
     }[method] || method || '';
 }
 
@@ -210,6 +211,17 @@ function renderTicket({ sale, settings }) {
         `
         : '';
 
+    // --- Desglose de pago combinado (solo si payment_method === 'mixto') ---
+    const payments = Array.isArray(sale.payments) ? sale.payments : [];
+    const paymentsBreakdownHtml = payments.length
+        ? payments.map((p) => `
+            <div class="row">
+                <span>&gt; ${escapeHtml(paymentLabel(p.payment_method))}</span>
+                <span>${fmt(p.amount)}</span>
+            </div>
+        `).join('')
+        : '';
+
     // --- Sucursal (branch) ---
     const branch = sale.branch || null;
     const businessName = (branch && branch.name) || settings.business_name || 'KATSAM Sistema de gestión para restaurantes';
@@ -357,6 +369,8 @@ function renderTicket({ sale, settings }) {
             </div>
 
             ${cashHtml}
+
+            ${paymentsBreakdownHtml}
 
             ${creditHtml}
 

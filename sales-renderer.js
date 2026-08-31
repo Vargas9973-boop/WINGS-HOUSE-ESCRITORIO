@@ -110,6 +110,54 @@ const chkPrint = document.getElementById('chk-print');
 const btnConfirmCheckout = document.getElementById('btn-confirm-checkout');
 const btnCancelCheckout = document.getElementById('btn-cancel-checkout');
 
+// Pago combinado (Combinar métodos de pago): un solo checkbox que sustituye
+// el selector Efectivo/Tarjeta/Transferencia por 3 campos de monto -- solo
+// disponible para público general (ver checkout-pay-methods-wrap, que
+// updateCheckoutModalForEmployee ya oculta por completo en ventas de
+// empleado, así que este bloque nunca queda visible ahí).
+const payMethodsButtonsEl = document.querySelector('#checkout-pay-methods-wrap .pay-methods');
+const chkSplitPayment = document.getElementById('chk-split-payment');
+const splitPaymentFields = document.getElementById('split-payment-fields');
+const splitEfectivoInput = document.getElementById('split-efectivo');
+const splitTarjetaInput = document.getElementById('split-tarjeta');
+const splitTransferenciaInput = document.getElementById('split-transferencia');
+const splitRemainingAmount = document.getElementById('split-remaining-amount');
+let splitPaymentActive = false;
+
+function updateSplitRemaining() {
+  const { total } = cartTotals();
+  const sum =
+    (Number(splitEfectivoInput.value) || 0) +
+    (Number(splitTarjetaInput.value) || 0) +
+    (Number(splitTransferenciaInput.value) || 0);
+  const remaining = Math.round((total - sum) * 100) / 100;
+
+  splitRemainingAmount.textContent = fmt(remaining);
+  splitRemainingAmount.classList.toggle('is-balanced', Math.abs(remaining) < 0.005);
+  splitRemainingAmount.classList.toggle('is-over', remaining < -0.004);
+}
+
+[splitEfectivoInput, splitTarjetaInput, splitTransferenciaInput].forEach((input) => {
+  input.addEventListener('input', updateSplitRemaining);
+});
+
+chkSplitPayment.addEventListener('change', () => {
+  splitPaymentActive = chkSplitPayment.checked;
+  payMethodsButtonsEl.style.display = splitPaymentActive ? 'none' : 'grid';
+  splitPaymentFields.style.display = splitPaymentActive ? 'block' : 'none';
+  cashFields.style.display = splitPaymentActive
+    ? 'none'
+    : (selectedPayMethod === 'efectivo' ? 'block' : 'none');
+
+  if (splitPaymentActive) {
+    splitEfectivoInput.value = '';
+    splitTarjetaInput.value = '';
+    splitTransferenciaInput.value = '';
+    updateSplitRemaining();
+    splitEfectivoInput.focus();
+  }
+});
+
 function ensureEmployeeSelector() {
   let panel = document.getElementById('employee-selector-panel');
   if (panel) return panel;
@@ -1081,6 +1129,16 @@ btnCheckout.addEventListener('click', () => {
   changeAmountEl.textContent = fmt(0);
   selectedPayMethod = 'efectivo';
   document.querySelectorAll('.pay-method-btn').forEach((b) => b.classList.toggle('active', b.dataset.method === 'efectivo'));
+
+  splitPaymentActive = false;
+  chkSplitPayment.checked = false;
+  splitPaymentFields.style.display = 'none';
+  payMethodsButtonsEl.style.display = 'grid';
+  splitEfectivoInput.value = '';
+  splitTarjetaInput.value = '';
+  splitTransferenciaInput.value = '';
+  updateSplitRemaining();
+
   updateCheckoutModalForEmployee();
   checkoutModal.classList.add('show');
   amountReceivedInput.focus();
@@ -1254,10 +1312,52 @@ btnConfirmCheckout.addEventListener('click', async () => {
   }
 
   // ================================================================
-  // COBRO EN EFECTIVO
+  // PAGO COMBINADO (Combinar métodos de pago)
+  // Solo aplica a público general -- el checkbox vive dentro de
+  // checkout-pay-methods-wrap, que updateCheckoutModalForEmployee oculta
+  // por completo en ventas de empleado, así que currentClientType===
+  // 'employee' con splitPaymentActive=true no debería poder ocurrir; se
+  // guarda igual como defensa en profundidad.
   // ================================================================
 
-  if (amountDue === 0) {
+  let splitPayments = null;
+
+  if (splitPaymentActive && currentClientType !== 'employee') {
+    const splitAmounts = {
+      efectivo: Number(splitEfectivoInput.value) || 0,
+      tarjeta: Number(splitTarjetaInput.value) || 0,
+      transferencia: Number(splitTransferenciaInput.value) || 0
+    };
+
+    splitPayments = Object.entries(splitAmounts)
+      .filter(([, amount]) => amount > 0)
+      .map(([method, amount]) => ({ method, amount: Math.round(amount * 100) / 100 }));
+
+    if (splitPayments.length < 2) {
+      toast(
+        'Captura al menos 2 métodos de pago para combinar, o desactiva "Combinar métodos de pago".',
+        'error'
+      );
+
+      btnConfirmCheckout.disabled = false;
+      return;
+    }
+
+    const splitSum = splitPayments.reduce((sum, p) => sum + p.amount, 0);
+
+    if (Math.abs(splitSum - amountDue) > 0.004) {
+      toast(
+        `La suma de los métodos de pago (${fmt(splitSum)}) no coincide con el total a cobrar (${fmt(amountDue)}).`,
+        'error'
+      );
+
+      btnConfirmCheckout.disabled = false;
+      return;
+    }
+
+    amountReceived = amountDue;
+    changeGiven = 0;
+  } else if (amountDue === 0) {
     amountReceived = 0;
     changeGiven = 0;
   } else if (effectivePaymentMethod === 'efectivo') {
@@ -1303,10 +1403,12 @@ btnConfirmCheckout.addEventListener('click', async () => {
     discount,
     total,
 
-    paymentMethod: effectivePaymentMethod,
+    paymentMethod: splitPayments ? 'mixto' : effectivePaymentMethod,
 
     amountReceived,
     changeGiven,
+
+    payments: splitPayments,
 
     items: cart.map((item) => ({
       id: item.id,

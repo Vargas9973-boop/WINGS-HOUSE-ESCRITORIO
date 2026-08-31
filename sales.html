@@ -42,6 +42,30 @@
           <button class="pay-method-btn" data-method="tarjeta">Tarjeta</button>
           <button class="pay-method-btn" data-method="transferencia">Transferencia</button>
         </div>
+
+        <label class="split-payment-toggle">
+          <input type="checkbox" id="chk-split-payment">
+          Combinar métodos de pago
+        </label>
+
+        <div id="split-payment-fields" class="split-payment-fields" style="display:none;">
+          <div class="split-payment-row">
+            <span>Efectivo</span>
+            <input type="number" id="split-efectivo" placeholder="0.00" min="0" step="0.01" autocomplete="off">
+          </div>
+          <div class="split-payment-row">
+            <span>Tarjeta</span>
+            <input type="number" id="split-tarjeta" placeholder="0.00" min="0" step="0.01" autocomplete="off">
+          </div>
+          <div class="split-payment-row">
+            <span>Transferencia</span>
+            <input type="number" id="split-transferencia" placeholder="0.00" min="0" step="0.01" autocomplete="off">
+          </div>
+          <div class="split-payment-remaining">
+            <span>Restante por asignar</span>
+            <strong id="split-remaining-amount">$0.00</strong>
+          </div>
+        </div>
       </div>
 
       <div id="cash-fields" class="cash-fields">

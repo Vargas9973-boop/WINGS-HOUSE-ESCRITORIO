@@ -634,7 +634,14 @@ async function createSale(payload, openedBy, cashierId) {
       ? Number(payload.employeeId)
       : null,
     p_employee_sale_type: payload.employeeSaleType || null,
-    p_employee_extra_payment: payload.employeeExtraPayment || null
+    p_employee_extra_payment: payload.employeeExtraPayment || null,
+    // Pago combinado (modal "Combinar métodos de pago" en sales-renderer.js):
+    // [{method, amount}, ...] con los rubros reales de caja. null/omitido
+    // en el flujo normal de un solo método -- process_sale valida que la
+    // suma cuadre exacto con el total y rechaza client_type='employee'.
+    p_payments: Array.isArray(payload.payments) && payload.payments.length > 0
+      ? payload.payments
+      : null
   });
 
   must(error, 'No se pudo registrar la venta');
@@ -733,6 +740,20 @@ async function getSaleById(id) {
   const rawItems = await getSaleItemsWithModifiers(id);
   const items = await reattachModifierNames(rawItems);
 
+  // Pago combinado: solo hay renglones en sale_payments cuando
+  // payment_method === 'mixto' (ver process_sale); para el resto de las
+  // ventas payments queda vacío y el ticket sigue mostrando el flujo
+  // normal (Pago: Efectivo/Tarjeta/Transferencia).
+  let payments = [];
+  if (sale.payment_method === 'mixto') {
+    const { data: pays, error: paysErr } = await supabase.rpc('get_sale_payments', {
+      p_branch_id: getCurrentBranchId(),
+      p_sale_ids: [id]
+    });
+    must(paysErr, 'No se pudo obtener el desglose de pago combinado');
+    payments = pays || [];
+  }
+
   let employeeBenefitUsed = 0;
   let employeeCashExtra = 0;
   let employeeCreditExtra = 0;
@@ -797,6 +818,7 @@ async function getSaleById(id) {
   return {
     ...sale,
     items,
+    payments,
     subtotal,
     discount,
     change_given: changeGiven,
@@ -1944,13 +1966,30 @@ async function getCorteResumen(fecha) {
   // comandaSetDeliveryStatus), pero se excluye igual por seguridad.
   const { data: sales, error: salesErr } = await supabase
    .from('sales')
-   .select('total, delivery_fee, payment_method, status, created_at, client_type, employee_benefit_before, employee_benefit_after, payment_status')
+   .select('id, total, delivery_fee, payment_method, status, created_at, client_type, employee_benefit_before, employee_benefit_after, payment_status')
    .eq('status', 'completada')
    .in('payment_status', ['pagado_en_caja', 'liquidado'])
    .eq('branch_id', getCurrentBranchId())
    .gte('created_at', inicioUTC)
    .lte('created_at', finUTC);
   must(salesErr, 'No se pudieron obtener las ventas del corte');
+
+  // Pago combinado ("mixto"): esas ventas no tienen un solo payment_method,
+  // así que su desglose real por rubro vive en sale_payments -- se trae
+  // aparte y se suma por método más abajo, en vez de la única bolsa
+  // ventasPorPago.mixto (que ni siquiera es un rubro real de caja).
+  const mixtoSaleIds = (sales || [])
+    .filter((s) => s.payment_method === 'mixto')
+    .map((s) => s.id);
+  let mixtoPayments = [];
+  if (mixtoSaleIds.length > 0) {
+    const { data: mp, error: mpErr } = await supabase.rpc('get_sale_payments', {
+      p_branch_id: getCurrentBranchId(),
+      p_sale_ids: mixtoSaleIds
+    });
+    must(mpErr, 'No se pudo obtener el desglose de pagos combinados');
+    mixtoPayments = mp || [];
+  }
 
   // Dinero en calle: snapshot en vivo (no se filtra por fecha) de lo que los
   // repartidores traen consigo ahora mismo, sin liquidar. Un domicilio
@@ -1991,9 +2030,21 @@ async function getCorteResumen(fecha) {
 
     if (pm === 'credito_nomina') {
       creditoNominaHoy += cashCountable;
+    } else if (pm === 'mixto') {
+      // Se suma abajo desde mixtoPayments (sale_payments), no aquí --
+      // 'mixto' no es un rubro real de caja.
     } else {
       ventasPorPago[pm] = (ventasPorPago[pm] || 0) + cashCountable;
     }
+  });
+
+  // client_type='employee' siempre queda fuera del pago combinado (ver
+  // process_sale), así que benefitUsed es 0 para toda venta 'mixto' y el
+  // monto de cada rubro en sale_payments es exactamente lo cobrado -- sin
+  // deducción adicional que aplicar aquí.
+  mixtoPayments.forEach((p) => {
+    const pm = p.payment_method || 'efectivo';
+    ventasPorPago[pm] = (ventasPorPago[pm] || 0) + (Number(p.amount) || 0);
   });
 
   const { data: movimientos, error: movErr } = await supabase
@@ -2849,7 +2900,8 @@ const HISTORY_PAYMENT_LABELS = {
   tarjeta: 'Tarjeta',
   transferencia: 'Transferencia',
   credito_nomina: 'Crédito Nómina',
-  beneficio_empleado: 'Beneficio (no cobrado)'
+  beneficio_empleado: 'Beneficio (no cobrado)',
+  mixto: 'Pago combinado'
 };
 
 // El escritorio abre pedidos para llevar con client_type 'Para llevar'

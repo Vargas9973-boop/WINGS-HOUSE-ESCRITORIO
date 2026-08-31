@@ -112,7 +112,8 @@ const PAYMENT_LABELS = {
   tarjeta: 'Tarjeta',
   transferencia: 'Transferencia',
   credito_nomina: 'Crédito Nómina',
-  beneficio_empleado: 'Beneficio Empleado'
+  beneficio_empleado: 'Beneficio Empleado',
+  mixto: 'Pago combinado'
 };
 
 function renderPayments(byPayment) {
