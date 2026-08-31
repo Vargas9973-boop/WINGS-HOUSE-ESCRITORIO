@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wings House - Ajustes</title>
+  <title>KATSAM Sistema de gestión para restaurantes - Ajustes</title>
   <link rel="stylesheet" href="common.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <header class="module-header">
       <div class="header-left">
         <button class="btn-icon-back" data-nav-home>&#8592;</button>
-        <img src="logo.png" alt="Wings House" class="header-logo">
+        <img src="logo_saas.png" alt="KATSAM Sistema de gestión para restaurantes" class="header-logo">
         <div class="module-title">
           <h1>Ajustes</h1>
           <span>Negocio, descuentos, impresora de tickets y biometría</span>
@@ -28,7 +28,7 @@
         </p>
         <div class="form-grid">
           <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:14px;">
-            <img id="set-logo-preview" src="logo.png" alt="Logo actual" style="width:64px; height:64px; object-fit:contain; border:1px solid var(--border-color); border-radius:8px; background:#fff;">
+            <img id="set-logo-preview" src="logo_saas.png" alt="Logo actual" style="width:64px; height:64px; object-fit:contain; border:1px solid var(--border-color); border-radius:8px; background:#fff;">
             <div>
               <input type="file" id="set-logo-file" accept="image/png,image/jpeg,image/webp">
               <div id="set-logo-status" style="font-size:0.78rem; color:var(--text-muted); margin-top:4px;"></div>
@@ -268,8 +268,61 @@
         </div>
       </div>
 
+      <div class="panel" style="margin-top:20px;">
+        <div class="panel-title">Mantenimiento del sistema</div>
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; justify-content:space-between; align-items:center;">
+            <span style="color:var(--text-muted); font-size:0.85rem;">Versión instalada</span>
+            <strong id="maint-version">—</strong>
+          </div>
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; justify-content:space-between; align-items:center;">
+            <span style="color:var(--text-muted); font-size:0.85rem;">Estado</span>
+            <span id="maint-status" class="status-indicator">Comprobando…</span>
+          </div>
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; justify-content:space-between; align-items:center;">
+            <span style="color:var(--text-muted); font-size:0.85rem;">Conexión</span>
+            <span id="maint-connection" class="status-indicator">Comprobando…</span>
+          </div>
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; justify-content:space-between; align-items:center;">
+            <span style="color:var(--text-muted); font-size:0.85rem;">Última comprobación</span>
+            <span id="maint-last-check">—</span>
+          </div>
+        </div>
+        <div class="modal-actions" style="justify-content:flex-start; margin-top:16px;">
+          <button id="btn-check-update" type="button" class="btn btn-outline">Buscar actualización</button>
+          <button id="btn-run-diagnostics" type="button" class="btn btn-outline">Ejecutar diagnóstico</button>
+          <button id="btn-report-problem" type="button" class="btn btn-outline">Reportar problema</button>
+        </div>
+      </div>
+
       <div class="modal-actions" style="justify-content:flex-start; margin-top:22px;">
         <button id="btn-save-settings" class="btn btn-brand">Guardar ajustes</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="diagnostics-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Resultado del diagnóstico</h2>
+      <div id="diagnostics-results" style="display:flex; flex-direction:column; gap:10px;"></div>
+      <div class="modal-actions">
+        <button id="btn-close-diagnostics" type="button" class="btn btn-outline">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="report-problem-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Reportar un problema</h2>
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Describe lo que pasó</label>
+          <textarea id="report-problem-description" rows="4" placeholder="Ej. La impresora no imprime el ticket al cobrar..."></textarea>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-cancel-report" type="button" class="btn btn-outline">Cancelar</button>
+        <button id="btn-send-report" type="button" class="btn btn-brand">Enviar reporte</button>
       </div>
     </div>
   </div>

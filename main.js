@@ -102,6 +102,45 @@ async function writeBranchConfig(cfg) {
   await fs.promises.writeFile(getBranchConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
 }
 
+// ==========================================================================
+// ACTUALIZACIONES — estado LOCAL de esta instalación (Ajustes -> Mantenimiento
+// del sistema). Igual que kds-config.json/branch-config.json arriba: la
+// versión del .exe y cuándo se comprobó por última vez NO son datos de
+// negocio (no viven en `settings`, esa tabla es por sucursal/tenant) --
+// cada PC/instalación tiene la suya propia.
+// ==========================================================================
+function getUpdateStatusPath() {
+  return path.join(app.getPath('userData'), 'update-status.json');
+}
+
+async function readUpdateStatus() {
+  try {
+    return JSON.parse(await fs.promises.readFile(getUpdateStatusPath(), 'utf8'));
+  } catch (err) {
+    return { lastCheckedAt: null, updateAvailable: false, latestVersion: null };
+  }
+}
+
+async function writeUpdateStatus(patch) {
+  const next = { ...(await readUpdateStatus()), ...patch };
+  try {
+    await fs.promises.writeFile(getUpdateStatusPath(), JSON.stringify(next, null, 2), 'utf8');
+  } catch (err) {
+    console.error('No se pudo guardar update-status.json:', err.message);
+  }
+  return next;
+}
+
+// Empuja el estado a la ventana principal en cuanto cambia (checking-for-
+// update/update-available/update-not-available, ver app.whenReady() abajo)
+// para que el puntito 🔵 del menú y el panel de Ajustes reaccionen sin F5.
+async function broadcastUpdateStatus() {
+  const status = await readUpdateStatus();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:status', status);
+  }
+}
+
 // Resuelve qué sucursal es esta instalación, SIN caer nunca en silencio a
 // una constante. Cuatro casos:
 //   1. Ya hay branch-config.json -> se usa tal cual.
@@ -589,7 +628,16 @@ app.whenReady().then(async () => {
 
   autoUpdater.checkForUpdatesAndNotify();
 
-  autoUpdater.on('update-available', () => log.info('Update available'));
+  autoUpdater.on('checking-for-update', () => {
+    writeUpdateStatus({ lastCheckedAt: new Date().toISOString() }).then(broadcastUpdateStatus);
+  });
+  autoUpdater.on('update-available', (info) => {
+    log.info('Update available');
+    writeUpdateStatus({ updateAvailable: true, latestVersion: info.version }).then(broadcastUpdateStatus);
+  });
+  autoUpdater.on('update-not-available', () => {
+    writeUpdateStatus({ updateAvailable: false }).then(broadcastUpdateStatus);
+  });
   autoUpdater.on('update-downloaded', () => {
     dialog.showMessageBox(mainWindow, {
       type: 'info',
@@ -1255,6 +1303,79 @@ safeHandle('print:ticket', async (saleId) => {
 safeHandle('printer:test', async () => {
   const settings = await db.getAllSettings();
   return printTestTicket(settings);
+});
+
+// ------------------------------------------------------------------
+// MANTENIMIENTO DEL SISTEMA (Ajustes) — versión/última comprobación son
+// LOCALES a esta instalación (ver update-status.json arriba), nunca se
+// guardan en `settings` (esa tabla es dato de negocio por sucursal/tenant).
+// "Estado" reutiliza getAllSettings(), ya scoped por sucursal igual que el
+// resto de la app; "Conexión" reutiliza isRealtimeConnected, que ya viene
+// filtrado por sucursal (subscribeToNewSales/subscribeToKdsChanges).
+// ------------------------------------------------------------------
+safeHandle('system:getInfo', async () => ({ version: app.getVersion(), ...(await readUpdateStatus()) }));
+
+safeHandle('system:checkForUpdate', async () => {
+  let checkError = null;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (err) {
+    // Típico en modo desarrollo sin empaquetar (no existe app-update.yml):
+    // el check ni siquiera arranca, así que 'checking-for-update' de arriba
+    // nunca se dispara. Se marca el intento aquí de todos modos, para que
+    // "Última comprobación" refleje el último intento, haya salido bien o no.
+    console.error('No se pudo comprobar actualizaciones:', err.message);
+    checkError = err.message;
+  }
+  const status = await writeUpdateStatus({ lastCheckedAt: new Date().toISOString() });
+  broadcastUpdateStatus();
+  return { version: app.getVersion(), ...status, checkError };
+});
+
+safeHandle('system:runDiagnostics', async () => {
+  const checks = [];
+
+  const branchId = db.getCurrentBranchIdOrNull();
+  checks.push({
+    name: 'Sucursal configurada',
+    ok: branchId != null,
+    detail: branchId != null ? `Sucursal #${branchId}` : 'No se ha resuelto (inicia sesión de nuevo).'
+  });
+
+  try {
+    await db.getAllSettings();
+    checks.push({ name: 'Conexión a la base de datos', ok: true, detail: 'Respondió correctamente.' });
+  } catch (err) {
+    checks.push({ name: 'Conexión a la base de datos', ok: false, detail: err.message });
+  }
+
+  checks.push({
+    name: 'Tiempo real (Realtime)',
+    ok: isRealtimeConnected,
+    detail: isRealtimeConnected ? 'Conectado.' : 'Sin conexión en vivo (usando respaldo por sondeo).'
+  });
+
+  checks.push({ name: 'Versión de la app', ok: true, detail: app.getVersion() });
+
+  return { ok: checks.every((c) => c.ok), checks };
+});
+
+// Manda el reporte a Sentry (captureMessage, no una excepción real) con la
+// sucursal/usuario como tags -- solo para triage interno del proveedor, no
+// se le muestra a otros negocios ni se guarda en Supabase.
+safeHandle('system:reportProblem', async (description) => {
+  const text = String(description || '').trim();
+  if (!text) throw new Error('Escribe una descripción del problema.');
+  if (!SENTRY_DSN) throw new Error('El monitoreo no está configurado en esta instalación.');
+  require('@sentry/electron/main').captureMessage(`[Reporte de usuario] ${text}`, {
+    level: 'info',
+    tags: {
+      branchId: db.getCurrentBranchIdOrNull() ?? 'sin-resolver',
+      usuario: currentSession ? currentSession.displayName : 'sin-sesion',
+      appVersion: app.getVersion()
+    }
+  });
+  return true;
 });
 
 // Botón de prueba en Ajustes -> Diagnóstico: dispara un error real hacia

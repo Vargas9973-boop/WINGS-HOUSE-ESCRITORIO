@@ -3170,7 +3170,7 @@ async function getBranding() {
     }
   }
   return {
-    companyName: settings.business_name || 'Wings House',
+    companyName: settings.business_name || 'KATSAM Sistema de gestión para restaurantes',
     logoUrl: settings.logo_url || null,
     primaryColor,
     secondaryColor

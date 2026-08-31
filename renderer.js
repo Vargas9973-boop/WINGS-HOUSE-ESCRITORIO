@@ -98,6 +98,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     updateCarousel();
     showLowStockBadge();
+    showUpdateBadge();
   }
 
   // Muestra en la tarjeta INVENTARIOS cuántos insumos están en/bajo su
@@ -119,6 +120,32 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.error('No se pudo revisar el stock mínimo de insumos:', err);
     }
   }
+
+  // Puntito discreto en AJUSTES cuando hay una actualización disponible
+  // (ver Ajustes -> Mantenimiento del sistema). update-status.json es LOCAL
+  // a esta instalación (main.js), no dato de negocio -- por eso este check
+  // no depende de la sucursal/tenant en sesión.
+  function renderUpdateBadge(status) {
+    if (!menuItems.some((item) => item.id === 'ajustes')) return;
+    const card = track.querySelector('[data-item-id="ajustes"]');
+    if (!card) return;
+    card.querySelector('.card-update-badge')?.remove();
+    if (!status || !status.updateAvailable) return;
+    const badge = document.createElement('div');
+    badge.className = 'card-update-badge';
+    badge.title = status.latestVersion ? `Actualización disponible: v${status.latestVersion}` : 'Actualización disponible';
+    card.appendChild(badge);
+  }
+
+  async function showUpdateBadge() {
+    if (!window.systemAPI) return;
+    try {
+      renderUpdateBadge(await window.systemAPI.getInfo());
+    } catch (err) {
+      console.error('No se pudo revisar si hay actualizaciones:', err);
+    }
+  }
+  window.systemAPI?.onUpdateStatus((status) => renderUpdateBadge(status));
 
   function updateCarousel() {
     const cards = track.children;

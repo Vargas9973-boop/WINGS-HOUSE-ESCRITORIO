@@ -1,6 +1,6 @@
-# Wings House — Sistema Administrativo
+# KATSAM Sistema de gestión para restaurantes
 
-Aplicación de escritorio (Electron) para la gestión completa de Wings House:
+Aplicación de escritorio (Electron) para la gestión completa del restaurante:
 Ventas (POS), Catálogo y Promociones, Inventarios, Merma, Costos y Asistencia.
 Toda la información se guarda en una base de datos SQLite local, incluida cada
 venta y su ticket, aunque la impresión física falle.

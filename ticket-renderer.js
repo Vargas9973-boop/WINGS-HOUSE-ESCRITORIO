@@ -212,7 +212,7 @@ function renderTicket({ sale, settings }) {
 
     // --- Sucursal (branch) ---
     const branch = sale.branch || null;
-    const businessName = (branch && branch.name) || settings.business_name || 'Wings House';
+    const businessName = (branch && branch.name) || settings.business_name || 'KATSAM Sistema de gestión para restaurantes';
     const businessAddress = (branch && branch.address) || settings.business_address || '';
     const businessPhone = (branch && branch.phone) || settings.business_phone || '';
 
@@ -274,7 +274,7 @@ function renderTicket({ sale, settings }) {
     root.innerHTML = `
         <img
             class="logo"
-            src="${escapeHtml(settings.logo_url || 'logo.png')}"
+            src="${escapeHtml(settings.logo_url || 'logo_saas.png')}"
             alt="logo"
         >
 

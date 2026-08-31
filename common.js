@@ -128,13 +128,13 @@ async function loadAndApplyBranding() {
     if (!themeAuto) restoreDefaultTheme();
     const values = {
       logoUrl: settings.logo_url || null,
-      companyName: settings.business_name || 'Wings House',
+      companyName: settings.business_name || 'KATSAM Sistema de gestión para restaurantes',
       primaryColor,
       secondaryColor
     };
     applyBrandingValues(values);
     localStorage.setItem(BRAND_CACHE_KEY, JSON.stringify(values));
-    if (values.companyName) document.title = document.title.replace(/Wings House/, values.companyName);
+    if (values.companyName) document.title = document.title.replace(/KATSAM Sistema de gestión para restaurantes/, values.companyName);
   } catch (err) {
     console.error('No se pudo cargar el logo/tema del negocio:', err);
   }

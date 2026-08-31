@@ -27,11 +27,11 @@ function renderReport({ report, costsList, wasteList, settings }) {
     ? wasteList.map((w) => `<tr><td>${w.created_at}</td><td>${escapeHtml(w.item_name)}</td><td>${w.quantity} ${escapeHtml(w.unit)}</td><td>${escapeHtml(w.reason)}</td><td>${fmt(w.cost)}</td></tr>`).join('')
     : `<tr><td colspan="5" class="empty">Sin merma registrada en el periodo.</td></tr>`;
 
-  const businessName = settings.business_name || 'Wings House';
+  const businessName = settings.business_name || 'KATSAM Sistema de gestión para restaurantes';
 
   root.innerHTML = `
     <div class="report-header">
-      <img src="${escapeHtml(settings.logo_url || 'logo.png')}" alt="logo">
+      <img src="${escapeHtml(settings.logo_url || 'logo_saas.png')}" alt="logo">
       <div>
         <h1>${escapeHtml(businessName)}</h1>
         <p>${escapeHtml(settings.business_address || '')} · Tel: ${escapeHtml(settings.business_phone || '')}</p>

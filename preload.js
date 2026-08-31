@@ -222,3 +222,11 @@ contextBridge.exposeInMainWorld('biometricAPI', {
 contextBridge.exposeInMainWorld('sentryAPI', {
   triggerTestError: () => call('sentry:test')
 });
+
+contextBridge.exposeInMainWorld('systemAPI', {
+  getInfo: () => call('system:getInfo'),
+  checkForUpdate: () => call('system:checkForUpdate'),
+  runDiagnostics: () => call('system:runDiagnostics'),
+  reportProblem: (description) => call('system:reportProblem', description),
+  onUpdateStatus: (cb) => ipcRenderer.on('update:status', (event, status) => cb(status))
+});

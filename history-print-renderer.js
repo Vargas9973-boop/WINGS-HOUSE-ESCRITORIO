@@ -31,11 +31,11 @@ function renderHistoryReport({ rows, kpis, filters, settings }) {
       </tr>`).join('')
     : `<tr><td colspan="6" class="empty">Sin movimientos en el periodo.</td></tr>`;
 
-  const businessName = settings.business_name || 'Wings House';
+  const businessName = settings.business_name || 'KATSAM Sistema de gestión para restaurantes';
 
   root.innerHTML = `
     <div class="report-header">
-      <img src="${escapeHtml(settings.logo_url || 'logo.png')}" alt="logo">
+      <img src="${escapeHtml(settings.logo_url || 'logo_saas.png')}" alt="logo">
       <div>
         <h1>${escapeHtml(businessName)}</h1>
         <p>${escapeHtml(settings.business_address || '')} · Tel: ${escapeHtml(settings.business_phone || '')}</p>

@@ -348,7 +348,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
   const themeAuto = document.getElementById('set-theme-auto').checked;
 
   const entries = {
-    business_name: document.getElementById('set-business-name').value.trim() || 'Wings House',
+    business_name: document.getElementById('set-business-name').value.trim() || 'KATSAM Sistema de gestión para restaurantes',
     business_address: document.getElementById('set-business-address').value.trim(),
     business_phone: document.getElementById('set-business-phone').value.trim(),
     employee_discount_pct: document.getElementById('set-employee-discount').value || '15',
@@ -481,8 +481,140 @@ document.getElementById('btn-add-driver')?.addEventListener('click', async () =>
   }
 });
 
+// ==========================================================================
+// MANTENIMIENTO DEL SISTEMA — versión/última comprobación/actualización son
+// LOCALES a esta instalación (ver update-status.json en main.js), nunca se
+// guardan en `settings` (esa tabla es dato de negocio por sucursal/tenant).
+// "Estado" reutiliza window.db.settings.getAll(), ya scoped por sucursal
+// igual que loadSettings() de arriba; "Conexión" reutiliza orderAlertAPI,
+// el mismo canal que ya usa la alerta de comandas nuevas (order-alert.js).
+// ==========================================================================
+function fmtLastCheck(iso) {
+  if (!iso) return 'Nunca';
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? `Hoy ${time}` : `${d.toLocaleDateString('es-MX')} ${time}`;
+}
+
+function renderMaintInfo(info) {
+  if (info.version) document.getElementById('maint-version').textContent = info.version;
+  document.getElementById('maint-last-check').textContent = fmtLastCheck(info.lastCheckedAt);
+}
+
+function renderConnection(connected) {
+  const el = document.getElementById('maint-connection');
+  el.className = connected ? 'status-indicator connected' : 'status-indicator disconnected';
+  el.textContent = connected ? '● Conectado' : '○ Sin conexión en vivo';
+}
+
+async function loadMaintenancePanel() {
+  const statusEl = document.getElementById('maint-status');
+  try {
+    await window.db.settings.getAll();
+    statusEl.className = 'status-indicator connected';
+    statusEl.textContent = '● Operativo';
+  } catch (err) {
+    statusEl.className = 'status-indicator error';
+    statusEl.textContent = '● Con problemas';
+  }
+
+  try {
+    renderMaintInfo(await window.systemAPI.getInfo());
+  } catch (err) {
+    console.error('No se pudo leer la información del sistema:', err);
+  }
+
+  try {
+    renderConnection(await window.orderAlertAPI.getStatus());
+  } catch (err) {
+    renderConnection(false);
+  }
+}
+
+window.systemAPI.onUpdateStatus((status) => renderMaintInfo(status));
+window.orderAlertAPI.onStatus((connected) => renderConnection(connected));
+
+document.getElementById('btn-check-update').addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Buscando...';
+  try {
+    const info = await window.systemAPI.checkForUpdate();
+    renderMaintInfo(info);
+    if (info.checkError) {
+      toast('No se pudo comprobar actualizaciones (revisa tu conexión).', 'error');
+    } else if (info.updateAvailable) {
+      toast(`Hay una actualización disponible (${info.latestVersion}).`, 'default');
+    } else {
+      toast('Ya tienes la última versión.', 'success');
+    }
+  } catch (err) {
+    console.error('No se pudo buscar actualizaciones:', err);
+    toast('No se pudo comprobar actualizaciones.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Buscar actualización';
+  }
+});
+
+document.getElementById('btn-run-diagnostics').addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget;
+  btn.disabled = true;
+  const resultsEl = document.getElementById('diagnostics-results');
+  resultsEl.textContent = 'Ejecutando...';
+  openModal('diagnostics-modal');
+  try {
+    const { checks } = await window.systemAPI.runDiagnostics();
+    resultsEl.innerHTML = '';
+    checks.forEach((c) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; justify-content:space-between; gap:10px; align-items:center;';
+      const label = document.createElement('span');
+      label.textContent = c.name;
+      const value = document.createElement('span');
+      value.className = `status-indicator ${c.ok ? 'connected' : 'error'}`;
+      value.textContent = `● ${c.detail}`;
+      row.appendChild(label);
+      row.appendChild(value);
+      resultsEl.appendChild(row);
+    });
+  } catch (err) {
+    console.error('No se pudo ejecutar el diagnóstico:', err);
+    resultsEl.textContent = 'No se pudo ejecutar el diagnóstico.';
+  } finally {
+    btn.disabled = false;
+  }
+});
+document.getElementById('btn-close-diagnostics').addEventListener('click', () => closeModal('diagnostics-modal'));
+
+document.getElementById('btn-report-problem').addEventListener('click', () => {
+  document.getElementById('report-problem-description').value = '';
+  openModal('report-problem-modal');
+});
+document.getElementById('btn-cancel-report').addEventListener('click', () => closeModal('report-problem-modal'));
+document.getElementById('btn-send-report').addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget;
+  const description = document.getElementById('report-problem-description').value.trim();
+  if (!description) {
+    toast('Escribe una descripción del problema.', 'error');
+    return;
+  }
+  btn.disabled = true;
+  try {
+    await window.systemAPI.reportProblem(description);
+    toast('Reporte enviado. Gracias.', 'success');
+    closeModal('report-problem-modal');
+  } catch (err) {
+    console.error('No se pudo enviar el reporte:', err);
+    toast(err.message || 'No se pudo enviar el reporte.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.addEventListener('DOMContentLoaded', () => {
   guardPermission('ajustes', 'can_view');
   loadSettings();
   loadDriversLiquidation();
+  loadMaintenancePanel();
 });

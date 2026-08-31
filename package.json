@@ -1,9 +1,9 @@
 {
   "name": "wings-house-admin",
   "version": "2.2.4",
-  "description": "Sistema administrativo Wings House - Ventas, Catálogo, Inventarios, Merma, Costos y Asistencia (Supabase)",
+  "description": "KATSAM Sistema de gestión para restaurantes - Ventas, Catálogo, Inventarios, Merma, Costos y Asistencia (Supabase)",
   "main": "main.js",
-  "author": "Wings House",
+  "author": "KATSAM",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
