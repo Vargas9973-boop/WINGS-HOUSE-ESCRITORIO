@@ -291,6 +291,43 @@ document.getElementById('btn-cerrar-corte').addEventListener('click', async () =
   }
 });
 
+// ==========================================================================
+// ABRIR CAJÓN MANUAL (fuera de una venta o del corte) -- no toca fondo,
+// movimientos ni cierre del corte, solo pide autorización de un admin y
+// manda el pulso vía corteAPI.openCashDrawer (cashdrawer:openManual en el
+// proceso principal).
+// ==========================================================================
+document.getElementById('btnAbrirCajon')?.addEventListener('click', () => {
+  document.getElementById('cajon-admin-user').value = '';
+  document.getElementById('cajon-admin-pass').value = '';
+  openModal('cajon-modal');
+  document.getElementById('cajon-admin-user').focus();
+});
+
+document.getElementById('btn-cancel-cajon')?.addEventListener('click', () => closeModal('cajon-modal'));
+
+document.getElementById('btn-confirm-cajon')?.addEventListener('click', async () => {
+  const username = document.getElementById('cajon-admin-user').value.trim();
+  const password = document.getElementById('cajon-admin-pass').value;
+
+  if (!username || !password) {
+    toast('Captura usuario y contraseña del admin.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-confirm-cajon');
+  btn.disabled = true;
+  try {
+    await window.corteAPI.openCashDrawer(username, password);
+    toast('Cajón abierto.', 'success');
+    closeModal('cajon-modal');
+  } catch (err) {
+    toast(err.message || 'No se pudo abrir el cajón.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.addEventListener('DOMContentLoaded', async () => {
   await guardPermission('corte', 'can_view');
   const fechaInput = document.getElementById('corte-fecha');

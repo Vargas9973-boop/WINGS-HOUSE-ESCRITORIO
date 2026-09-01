@@ -47,7 +47,8 @@ async function imprimirTicketCorte(fecha) {
     const html = `
     <html><head><meta charset="utf-8"><style>
       @page{size:${widthMm}mm auto;margin:0}
-      body{width:${widthMm}mm;font-family:'Courier New',monospace;font-size:${fontSize}px;margin:0;padding:4mm;color:#000}
+      body{width:${widthMm}mm;font-family:'Courier New',monospace;font-weight:700;font-size:${fontSize}px;margin:0;padding:4mm;color:#000;-webkit-font-smoothing:antialiased}
+      body,body *{-webkit-text-stroke:0.35px #000}
       .c{text-align:center}.r{text-align:right}
       .sep{border-top:1px dashed #000;margin:6px 0}
       .row{display:flex;justify-content:space-between}

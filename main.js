@@ -33,6 +33,8 @@ const db = require('./db'); // capa de datos sobre Supabase
 const attendanceProvider = require('./attendanceProvider'); // lector de huella opcional
 const { handleShortcut } = require('./shortcuts'); // atajos de teclado del POS
 
+const { execFile } = require('child_process');
+
 // ==========================================================================
 // KDS (Kitchen Display System) — segunda ventana para la TV de cocina por
 // HDMI, ver kds/. Sin login: no pasa por login.html ni por currentSession.
@@ -985,6 +987,8 @@ function registerIpcHandlers() {
   safeHandle('modifiers:update', (id, data) => db.updateModifier(id, data));
   safeHandle('productModifierGroups:getAll', () => db.getAllProductModifierGroups());
   safeHandle('productModifierGroups:set', (productId, groupName, enabled, qty) => db.setProductModifierGroup(productId, groupName, enabled, qty));
+  safeHandle('promotionModifierGroups:getAll', () => db.getAllPromotionModifierGroups());
+  safeHandle('promotionModifierGroups:set', (promotionId, groupName, enabled, qty) => db.setPromotionModifierGroup(promotionId, groupName, enabled, qty));
 
   // ------------------------------------------------------------------
   // COMBOS -- ver product_components (producto -> producto)
@@ -1060,10 +1064,62 @@ function registerIpcHandlers() {
     const win = new BrowserWindow({ show: false, width: 302, height: 800, webPreferences: { offscreen: true } });
     await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
     await new Promise(r => setTimeout(r, 800));
-    win.webContents.print({ silent: false, printBackground: true, pageSize: getThermalPageSize(settings.ticket_width) }, () => {
+    win.webContents.print({ silent: false, printBackground: true, pageSize: getThermalPageSize(settings.ticket_width) }, (success) => {
       setTimeout(() => { if (!win.isDestroyed()) win.close(); }, 1000);
+
+      // Este diálogo (silent:false) deja elegir la impresora a mano, así que
+      // no hay forma de saber cuál escogió el usuario; el pulso del cajón se
+      // manda siempre a la impresora configurada en Ajustes -> Impresión
+      // (la térmica con el cable del cajón), no a lo que se haya elegido acá.
+      if (success && isCashDrawerEnabled(settings)) {
+        kickCashDrawer(String(settings.printer_name || '').trim());
+      }
     });
     return true;
+  });
+
+  // Apertura manual del cajón (botón "Abrir cajón" en Corte de Caja), fuera
+  // de cualquier impresión. No toca nada del corte (fondo, movimientos,
+  // cierre): solo valida credenciales de un admin y manda el pulso.
+  // verifyAdminCredentials() NO reemplaza la sesión activa del cajero -- el
+  // usuario/contraseña que llega aquí es del admin que autoriza, no de quien
+  // tiene la sesión abierta en la app.
+  safeHandle('cashdrawer:openManual', async (adminUsername, adminPassword) => {
+    await db.verifyAdminCredentials(adminUsername, adminPassword);
+
+    const settings = await db.getAllSettings();
+    const printerName = String(settings.printer_name || '').trim();
+    if (!printerName) {
+      throw new Error('No hay impresora configurada en Ajustes -> Impresión.');
+    }
+
+    const result = await kickCashDrawer(printerName);
+    if (!result.success) {
+      throw new Error('No se pudo abrir el cajón. Verifica que la impresora esté compartida en Windows con ese mismo nombre.');
+    }
+    return result;
+  });
+
+  // Ticket de cocina "de respaldo": independiente del KDS (kds/), pensado
+  // para cuando esa pantalla no está disponible o se cae. Vuelve a pedir la
+  // venta completa a la BD en el momento del clic (no reusa el payload de
+  // la alerta ni nada cacheado), así que si ya se agregaron más productos a
+  // la misma mesa desde que sonó la notificación, el ticket sale con el
+  // consumo completo y actual, ligado al mismo table_number/sale.id -- no
+  // hay forma de que salga desfasado o repetido. Solo imprime: no marca
+  // nada en la venta, no cambia kitchen_status, no abre el cajón.
+  safeHandle('kitchen:printTicket', async (saleId) => {
+    const sale = await db.getSaleById(saleId);
+    if (!sale) {
+      throw new Error(`Comanda no encontrada con ID: ${saleId}`);
+    }
+
+    const settings = await db.getAllSettings();
+    if (!isPrinterEnabled(settings)) {
+      return { success: false, reason: 'disabled' };
+    }
+
+    return printKitchenTicket(sale, settings);
   });
 
   safeHandle('reports:profitability', (filters = {}) =>
@@ -1292,6 +1348,13 @@ safeHandle('print:ticket', async (saleId) => {
 
   if (result.success) {
     await db.markSalePrinted(saleId);
+
+    // Solo el ticket de venta (público general/empleado interno) abre el
+    // cajón -- el corte de caja usa su propio handler (corte:printTicket) y
+    // no pasa por aquí.
+    if (isCashDrawerEnabled(settings)) {
+      kickCashDrawer(result.printer);
+    }
   }
 
   return result;
@@ -1529,6 +1592,182 @@ function isPrinterEnabled(settings) {
     return settings?.printer_enabled !== 'false';
 }
 
+// true salvo que se apague explícitamente en Ajustes -> Impresión; una
+// sucursal cuya impresora no tiene el cable del cajón conectado puede
+// desactivarlo sin afectar a las demás (settings es por sucursal).
+function isCashDrawerEnabled(settings) {
+    return settings?.cash_drawer_enabled !== 'false';
+}
+
+// Pulso genérico de apertura de cajón vía ESC/POS: ESC p m t1 t2
+// (0x1B 0x70 0x00 0x19 0xFA -- pin 2, ~50ms on / ~500ms off). Es el comando
+// que reconoce la inmensa mayoría de impresoras térmicas con puerto de
+// cajón integrado (incluida esta POS-8360), sin necesitar el SDK del
+// fabricante.
+const CASH_DRAWER_KICK = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa]);
+
+// El ticket se manda a imprimir como HTML renderizado (webContents.print),
+// que pasa por el driver gráfico de Windows y NO puede llevar bytes crudos.
+// Para el pulso del cajón hace falta un trabajo de impresión RAW aparte.
+//
+// Se intentó primero con un módulo nativo (node-gyp) para hablar directo
+// con el spooler, pero su código C++ no compila contra el toolchain de
+// Visual Studio/Windows SDK instalado aquí (error en node_printer_win.cc) y
+// tampoco hay binario precompilado para esta versión de Node -- hubiera
+// dejado "npm run build" roto para todos los tenants. En su lugar se manda
+// el pulso con "copy /b" a la impresora COMPARTIDA en Windows
+// (\\localhost\NombreDeLaImpresora): es el mismo mecanismo con el que
+// Windows entrega un trabajo RAW al spooler, sin compilar nada.
+//
+// Requiere un paso único por sucursal: compartir esa impresora en Windows
+// (Dispositivos e impresoras -> click derecho -> Propiedades de impresora
+// -> pestaña Compartir -> "Compartir esta impresora", dejando el nombre de
+// recurso compartido igual al nombre de la impresora tal cual aparece en
+// Ajustes -> Impresión).
+// Devuelve una promesa (resolve siempre true/false, nunca rechaza) para que
+// tanto el disparo automático (venta/corte, sin esperar el resultado) como
+// el botón manual (que sí necesita avisarle al usuario si falló) puedan
+// usar la misma función.
+function kickCashDrawer(printerName) {
+    return new Promise((resolve) => {
+        if (!printerName) {
+            resolve({ success: false, reason: 'no-printer-configured' });
+            return;
+        }
+
+        const tmpFile = path.join(app.getPath('temp'), 'wh-cash-drawer-kick.bin');
+
+        fs.writeFile(tmpFile, CASH_DRAWER_KICK, (writeErr) => {
+            if (writeErr) {
+                console.warn('🗄️ No se pudo escribir el archivo temporal del cajón:', writeErr.message);
+                resolve({ success: false, reason: writeErr.message });
+                return;
+            }
+
+            const target = `\\\\localhost\\${printerName}`;
+
+            execFile('cmd.exe', ['/c', 'copy', '/b', tmpFile, target], (err) => {
+                if (err) {
+                    console.warn(
+                        '🗄️ No se pudo abrir el cajón en', printerName,
+                        '-- ¿está esa impresora compartida en Windows con ese mismo nombre?:',
+                        err.message
+                    );
+                    resolve({ success: false, reason: err.message });
+                } else {
+                    console.log('🗄️ Pulso de apertura de cajón enviado a:', target);
+                    resolve({ success: true });
+                }
+            });
+        });
+    });
+}
+
+function escapeHtmlMain(str) {
+    return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+}
+
+// Encabezado del ticket de cocina: mesa, para llevar o domicilio -- lo que
+// identifique la comanda tiene que quedar clarísimo arriba, es lo primero
+// que va a leer cocina.
+function kitchenOrderLabel(sale) {
+    if (sale.table_number) return `MESA ${sale.table_number}`;
+    if (sale.is_delivery) return `DOMICILIO${sale.customer_name ? ' - ' + sale.customer_name : ''}`;
+    return `PARA LLEVAR #${sale.id}`;
+}
+
+// Ticket de cocina: solo nombre/cantidad/modificadores, sin precios (no es
+// para el cliente). Misma sucursal, mismo ancho de papel y mismo refuerzo
+// de negritas que el resto de los tickets térmicos.
+function buildKitchenTicketHtml(sale, settings) {
+    const widthMm = getTicketWidthMm(settings?.ticket_width);
+    const items = Array.isArray(sale.items) ? sale.items : [];
+
+    const itemsHtml = items.map((item) => {
+        const modifierNames = (item.sale_item_modifiers || [])
+            .map((sim) => sim.modifiers?.name)
+            .filter(Boolean);
+        const modifiersHtml = modifierNames
+            .map((name) => `<div class="mod">&gt; ${escapeHtmlMain(name)}</div>`)
+            .join('');
+
+        return `
+            <div class="item">
+                <div class="item-line">
+                    <span class="qty">${Number(item.quantity) || 0}x</span>
+                    <span class="name">${escapeHtmlMain(item.name || '')}</span>
+                </div>
+                ${modifiersHtml}
+            </div>`;
+    }).join('');
+
+    const timeStr = new Intl.DateTimeFormat('es-MX', {
+        timeZone: 'America/Mexico_City',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    }).format(new Date()).toUpperCase();
+
+    return `
+    <html><head><meta charset="utf-8"><style>
+      @page { size: ${widthMm}mm auto; margin: 0; }
+      body { width: ${widthMm}mm; font-family: 'Courier New', monospace; font-weight: 700; font-size: 14px; margin: 0; padding: 4mm; color: #000; -webkit-font-smoothing: antialiased; }
+      body, body * { -webkit-text-stroke: 0.35px #000; }
+      .c { text-align: center; }
+      .sep { border-top: 1px dashed #000; margin: 8px 0; }
+      .title { font-size: 19px; text-align: center; }
+      .sub { text-align: center; font-size: 12px; }
+      .item { margin-bottom: 10px; }
+      .item-line { display: flex; gap: 6px; font-size: 17px; }
+      .qty { min-width: 30px; }
+      .mod { font-size: 12px; padding-left: 36px; }
+    </style></head><body>
+      <div class="title">${escapeHtmlMain(kitchenOrderLabel(sale))}</div>
+      <div class="sub">Comanda interna #${escapeHtmlMain(String(sale.id))} · ${timeStr}</div>
+      <div class="sep"></div>
+      ${itemsHtml || '<div class="c">Sin productos</div>'}
+      <div class="sep"></div>
+      <div class="c">*** TICKET DE COCINA (respaldo, no reemplaza KDS) ***</div>
+    </body></html>`;
+}
+
+function printKitchenTicket(sale, settings) {
+    return new Promise((resolve) => {
+        const win = new BrowserWindow({ show: false, width: 320, height: 600 });
+        const html = buildKitchenTicketHtml(sale, settings);
+        const configuredPrinter = String(settings?.printer_name || '').trim();
+
+        const finish = (result) => {
+            if (!win.isDestroyed()) win.close();
+            resolve(result);
+        };
+
+        win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+            .then(() => new Promise((r) => setTimeout(r, 400)))
+            .then(() => {
+                const printOptions = {
+                    printBackground: true,
+                    margins: { marginType: 'none' },
+                    pageSize: getThermalPageSize(settings?.ticket_width)
+                };
+
+                if (configuredPrinter) {
+                    printOptions.silent = true;
+                    printOptions.deviceName = configuredPrinter;
+                } else {
+                    printOptions.silent = false;
+                }
+
+                win.webContents.print(printOptions, (success, reason) => {
+                    finish({ success, reason: reason || null, printer: configuredPrinter || null });
+                });
+            })
+            .catch((err) => finish({ success: false, reason: err.message }));
+    });
+}
+
 // Ticket de prueba para Ajustes -> Impresión -> "Imprimir prueba": imprime
 // dos reglas de 32 y 48 caracteres (referencias estándar de 58mm/80mm) para
 // que se pueda verificar a simple vista que el papel cargado corresponde al
@@ -1545,7 +1784,8 @@ function printTestTicket(settings) {
         const html = `
         <html><head><meta charset="utf-8"><style>
           @page { size: ${widthMm}mm auto; margin: 0; }
-          body { width: ${widthMm}mm; font-family: 'Courier New', monospace; font-size: 12px; margin: 0; padding: 3mm; color: #000; }
+          body { width: ${widthMm}mm; font-family: 'Courier New', monospace; font-weight: 700; font-size: 12px; margin: 0; padding: 3mm; color: #000; -webkit-font-smoothing: antialiased; }
+          body, body * { -webkit-text-stroke: 0.35px #000; }
           .c { text-align: center; }
           .b { font-weight: bold; }
           .sep { border-top: 1px dashed #000; margin: 6px 0; }

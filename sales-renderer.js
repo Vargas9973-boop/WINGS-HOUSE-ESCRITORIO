@@ -18,6 +18,7 @@ let selectedPayMethod = 'efectivo';
 let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
 let lastFocusedQtyIndex = null; // índice en cart[] del último input de cantidad enfocado -- ver window.__whQtyHooks más abajo
 let productModifierGroupsByProduct = new Map(); // productId -> Map(group_name -> qty), p.ej. 4 -> Map([['Salsas', 1]]) -- ver showSauceSelector()
+let promotionModifierGroupsByPromotion = new Map(); // mismo shape que arriba, pero por promotion_id (tabla propia, ver 20260901000000_promotion_modifier_groups.sql)
 let cachedSauceModifiers = null; // caché de window.db.modifiers.list('Salsas')
 
 // Semáforo de disponibilidad por producto a partir de recipes+inventory
@@ -562,12 +563,13 @@ function setClientType(type) {
 // ==========================================================================
 async function loadCatalog() {
   try {
-    const [products, promos, settings, recipesRaw, productModifierGroups] = await Promise.all([
+    const [products, promos, settings, recipesRaw, productModifierGroups, promotionModifierGroups] = await Promise.all([
       window.db.products.getAll(),
       window.db.promotions.getAll(),
       window.db.settings.getAll(),
       window.db.recipes.getAllWithStock(),
-      window.db.productModifierGroups.getAll()
+      window.db.productModifierGroups.getAll(),
+      window.db.promotionModifierGroups.getAll()
     ]);
     allProducts = products.filter((p) => p.active);
     allPromotions = promos.filter((p) => p.active);
@@ -580,6 +582,14 @@ async function loadCatalog() {
         productModifierGroupsByProduct.set(row.product_id, new Map());
       }
       productModifierGroupsByProduct.get(row.product_id).set(row.group_name, Math.max(1, Number(row.qty) || 1));
+    });
+
+    promotionModifierGroupsByPromotion = new Map();
+    (promotionModifierGroups || []).forEach((row) => {
+      if (!promotionModifierGroupsByPromotion.has(row.promotion_id)) {
+        promotionModifierGroupsByPromotion.set(row.promotion_id, new Map());
+      }
+      promotionModifierGroupsByPromotion.get(row.promotion_id).set(row.group_name, Math.max(1, Number(row.qty) || 1));
     });
 
     await loadEmployeesForSales();
@@ -624,11 +634,27 @@ function renderPromoStrip() {
     .join('');
 
   promoStrip.querySelectorAll('.promo-card').forEach((card) => {
-    card.addEventListener('click', () => {
+    card.addEventListener('click', async () => {
       const promo = allPromotions.find((p) => p.id === Number(card.dataset.id));
-      if (promo) {
-        addToCart({ id: promo.id, name: promo.name, itemType: 'promo', basePrice: promo.price });
+      if (!promo) return;
+
+      const item = { id: promo.id, name: promo.name, itemType: 'promo', basePrice: promo.price };
+
+      // Misma exigencia que ya aplica a productos (ver más abajo, en el
+      // click de .product-card): una promo/paquete puede pedir elegir
+      // salsa(s) igual que un producto (promotion_modifier_groups, tabla
+      // propia sin relación con products -- ver
+      // 20260901000000_promotion_modifier_groups.sql).
+      const groups = promotionModifierGroupsByPromotion.get(promo.id);
+      const saucesQty = groups && groups.get('Salsas');
+      if (saucesQty) {
+        const chosen = await showSauceSelector(saucesQty);
+        if (!chosen) return;
+        item.modifierIds = chosen.map((c) => c.id);
+        item.modifierNames = chosen.map((c) => c.name);
       }
+
+      addToCart(item);
     });
   });
 }

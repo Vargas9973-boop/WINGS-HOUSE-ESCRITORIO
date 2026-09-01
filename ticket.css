@@ -3,7 +3,17 @@
 body {
   background: #ffffff;
   font-family: 'Courier New', Courier, monospace;
+  font-weight: 700;
   color: #000000;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Refuerza el trazo de las letras: a la densidad de una térmica de 203dpi,
+   el peso "bold" normal de Chromium sigue perdiendo los trazos finos y el
+   ticket sale borroso. El text-stroke engrosa el glyph sin cambiar el
+   tamaño ni el layout. */
+.ticket, .ticket * {
+  -webkit-text-stroke: 0.35px #000;
 }
 
 .ticket {
@@ -59,12 +69,13 @@ body {
 
 .ticket .items .item-detail {
   font-size: 11px;
-  color: #333;
+  color: #000;
 }
 
 .ticket .items .item-modifier {
   font-size: 11px;
   font-weight: 700;
+  color: #000;
   padding-left: 8px;
 }
 

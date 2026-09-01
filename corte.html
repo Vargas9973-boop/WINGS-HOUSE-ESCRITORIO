@@ -68,6 +68,7 @@
           <div id="ticket"></div>
           </div>
           <button id="btnImprimirCorte" class="btn btn-brand" style="width:100%; margin-top:12px; padding:14px;">🖨️ Imprimir Ticket 58mm</button>
+          <button id="btnAbrirCajon" class="btn btn-outline" style="width:100%; margin-top:8px; padding:14px;">🗄️ Abrir cajón (requiere admin)</button>
       </div>
     </div>
   </div>
@@ -106,6 +107,29 @@
       <div class="modal-actions">
         <button class="btn btn-outline" id="btn-cancel-salida">Cancelar</button>
         <button class="btn btn-brand" id="btn-save-salida">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cajon-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Autorización de administrador</h2>
+      <p style="color:var(--text-muted); font-size:0.85rem; margin-top:-8px;">
+        Abrir el cajón fuera de una venta o corte requiere confirmar usuario y contraseña de un administrador.
+      </p>
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Usuario admin</label>
+          <input type="text" id="cajon-admin-user" autocomplete="off">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Contraseña</label>
+          <input type="password" id="cajon-admin-pass" autocomplete="off">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="btn-cancel-cajon">Cancelar</button>
+        <button class="btn btn-brand" id="btn-confirm-cajon">Abrir cajón</button>
       </div>
     </div>
   </div>

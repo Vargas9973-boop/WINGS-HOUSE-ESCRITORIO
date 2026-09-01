@@ -13,6 +13,7 @@ let selectedCategory = 'all';
 let selectedPayMethod = 'efectivo';
 let productAvailability = {}; // productId -> { status: 'rojo'|'amarillo'|'verde', shortInsumo, maxSellable } -- ver computeProductAvailability()
 let productModifierGroupsByProduct = new Map(); // productId -> Map(group_name -> qty), p.ej. 4 -> Map([['Salsas', 1]]); un combo puede pedir qty=2
+let promotionModifierGroupsByPromotion = new Map(); // mismo shape que arriba, pero por promotion_id (tabla propia, ver 20260901000000_promotion_modifier_groups.sql)
 let cachedSauceModifiers = null; // caché de window.db.modifiers.list('Salsas') -- ver showSauceSelector()
 
 // Semáforo de disponibilidad por producto a partir de recipes+inventory
@@ -185,6 +186,7 @@ const tablesGrid = document.getElementById('tables-grid');
 const takeoutGrid = document.getElementById('takeout-grid');
 const cartHeaderTitle = document.getElementById('cart-header-title');
 const btnCancelTable = document.getElementById('btn-cancel-table');
+const btnPrintKitchen = document.getElementById('btn-print-kitchen');
 const productsGrid = document.getElementById('products-grid');
 const promoStrip = document.getElementById('promo-strip');
 const cartItemsContainer = document.getElementById('cart-items');
@@ -620,11 +622,12 @@ document.getElementById('btn-back').addEventListener('click', () => {
 async function ensureCatalog() {
   if (catalogLoaded) return;
 
-  const [products, promos, recipesRaw, productModifierGroups] = await Promise.all([
+  const [products, promos, recipesRaw, productModifierGroups, promotionModifierGroups] = await Promise.all([
     window.db.products.getAll(),
     window.db.promotions.getAll(),
     window.db.recipes.getAllWithStock(),
-    window.db.productModifierGroups.getAll()
+    window.db.productModifierGroups.getAll(),
+    window.db.promotionModifierGroups.getAll()
   ]);
 
   allProducts = products.filter((p) => p.active);
@@ -637,6 +640,14 @@ async function ensureCatalog() {
       productModifierGroupsByProduct.set(row.product_id, new Map());
     }
     productModifierGroupsByProduct.get(row.product_id).set(row.group_name, Math.max(1, Number(row.qty) || 1));
+  });
+
+  promotionModifierGroupsByPromotion = new Map();
+  (promotionModifierGroups || []).forEach((row) => {
+    if (!promotionModifierGroupsByPromotion.has(row.promotion_id)) {
+      promotionModifierGroupsByPromotion.set(row.promotion_id, new Map());
+    }
+    promotionModifierGroupsByPromotion.get(row.promotion_id).set(row.group_name, Math.max(1, Number(row.qty) || 1));
   });
 
   catalogLoaded = true;
@@ -1177,17 +1188,22 @@ async function showSauceSelector(count = 1) {
 async function addToOrder(item) {
   try {
     // Si el producto pertenece al grupo "Salsas" (ver product_modifier_groups,
-    // asignado hoy a ALITAS/BONELESS), se exige elegir una salsa antes de
-    // agregarlo. Si el usuario cancela el selector, se aborta sin llamar a
-    // addItem.
-    if (item.itemType === 'product') {
-      const groups = productModifierGroupsByProduct.get(item.id);
-      const saucesQty = groups && groups.get('Salsas');
-      if (saucesQty) {
-        const chosen = await showSauceSelector(saucesQty);
-        if (!chosen) return;
-        item = { ...item, modifierIds: chosen.map((c) => c.id), modifierNames: chosen.map((c) => c.name) };
-      }
+    // asignado hoy a ALITAS/BONELESS) se exige elegir salsa(s) antes de
+    // agregarlo. Una promoción/paquete puede pedir lo mismo vía su propia
+    // tabla (promotion_modifier_groups, ver
+    // 20260901000000_promotion_modifier_groups.sql) -- antes solo los
+    // productos pasaban por este chequeo. Si el usuario cancela el
+    // selector, se aborta sin llamar a addItem.
+    const groups = item.itemType === 'product'
+      ? productModifierGroupsByProduct.get(item.id)
+      : item.itemType === 'promo'
+        ? promotionModifierGroupsByPromotion.get(item.id)
+        : null;
+    const saucesQty = groups && groups.get('Salsas');
+    if (saucesQty) {
+      const chosen = await showSauceSelector(saucesQty);
+      if (!chosen) return;
+      item = { ...item, modifierIds: chosen.map((c) => c.id), modifierNames: chosen.map((c) => c.name) };
     }
 
     await window.comandasAPI.addItem(
@@ -1552,6 +1568,35 @@ window.__whQtyHooks = {
 // ==========================================================================
 // CANCELAR MESA
 // ==========================================================================
+
+document
+// Ticket de cocina de respaldo (independiente del KDS): reimprime en
+// cualquier momento el consumo ACTUAL de esta mesa/pedido, vuelto a pedir a
+// la BD (kitchen:printTicket -> db.getSaleById), nunca desde currentItems en
+// memoria -- así, si se agregaron más productos después del último envío,
+// el ticket sale completo y ligado al mismo currentSaleId, sin duplicar ni
+// desfasarse.
+btnPrintKitchen?.addEventListener('click', async () => {
+  if (currentSaleId == null) {
+    toast('Todavía no hay una comanda abierta para imprimir.', 'error');
+    return;
+  }
+  btnPrintKitchen.disabled = true;
+  try {
+    const result = await window.kitchenTicketAPI.print(currentSaleId);
+    if (result && result.success) {
+      toast('Ticket de cocina enviado a imprimir.', 'success');
+    } else if (result && result.reason === 'disabled') {
+      toast('La impresión está deshabilitada en Ajustes -> Impresión.', 'error');
+    } else {
+      toast('No se pudo imprimir el ticket de cocina.', 'error');
+    }
+  } catch (err) {
+    toast('No se pudo imprimir el ticket de cocina.', 'error');
+  } finally {
+    btnPrintKitchen.disabled = false;
+  }
+});
 
 document
   .getElementById('btn-cancel-table')

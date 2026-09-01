@@ -236,6 +236,16 @@
             <option value="extras">Extras</option>
           </select>
         </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="promo-sauces-group">
+            Esta promoción/paquete pide elegir salsa (grupo "Salsas") en Comandas
+          </label>
+          <div id="promo-sauces-qty-wrap" style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+            <label for="promo-sauces-qty" style="margin:0;">Cuántas salsas debe elegir</label>
+            <input type="number" id="promo-sauces-qty" min="1" step="1" value="1" style="width:70px;">
+          </div>
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-outline" id="btn-cancel-promo">Cancelar</button>

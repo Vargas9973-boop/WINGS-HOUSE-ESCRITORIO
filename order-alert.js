@@ -111,7 +111,7 @@
         border-radius: 12px;
         box-shadow: 0 8px 28px rgba(0,0,0,0.45);
         padding: 14px 18px;
-        min-width: 260px;
+        min-width: 320px;
         color: #fff;
         font-family: inherit;
         animation: order-alert-pulse 1s ease-in-out infinite;
@@ -132,10 +132,12 @@
       }
       #order-alert-banner .oa-actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
       }
       #order-alert-banner button {
         flex: 1;
+        min-width: 90px;
         border: none;
         border-radius: 8px;
         padding: 8px 10px;
@@ -143,9 +145,18 @@
         font-weight: 700;
         cursor: pointer;
       }
+      #order-alert-banner button:disabled {
+        opacity: 0.7;
+        cursor: default;
+      }
       #order-alert-banner .oa-view {
         background: #ff8a00;
         color: #1a0d00;
+      }
+      #order-alert-banner .oa-print {
+        background: transparent;
+        border: 1px solid #4dd0e1;
+        color: #4dd0e1;
       }
       #order-alert-banner .oa-accept {
         background: transparent;
@@ -176,10 +187,38 @@
       <div class="oa-detail">${describeAlert(alert)} · $${alert.total.toFixed(2)}</div>
       <div class="oa-actions">
         <button type="button" class="oa-view">Ver pedido</button>
+        <button type="button" class="oa-print">🖨️ Imprimir comanda</button>
         <button type="button" class="oa-accept">Aceptar comanda</button>
       </div>
     `;
     document.body.appendChild(bannerEl);
+
+    // Ticket de cocina de respaldo, independiente del KDS -- vuelve a pedir
+    // la venta completa a la BD en este momento (kitchen:printTicket), así
+    // que si ya se le agregaron más productos desde que sonó la alerta el
+    // ticket sale con el consumo completo y actual, no con lo que traía la
+    // alerta cuando llegó. No cierra la alerta ni la marca como aceptada:
+    // eso lo sigue haciendo "Aceptar comanda" por separado.
+    const printBtn = bannerEl.querySelector('.oa-print');
+    printBtn.addEventListener('click', async () => {
+      if (!window.kitchenTicketAPI) return;
+      printBtn.disabled = true;
+      const original = printBtn.textContent;
+      printBtn.textContent = 'Imprimiendo…';
+      try {
+        const result = await window.kitchenTicketAPI.print(alert.id);
+        printBtn.textContent = result && result.success ? '✅ Impreso' : '❌ Error';
+      } catch (err) {
+        printBtn.textContent = '❌ Error';
+      } finally {
+        setTimeout(() => {
+          if (printBtn.isConnected) {
+            printBtn.textContent = original;
+            printBtn.disabled = false;
+          }
+        }, 1800);
+      }
+    });
 
     bannerEl.querySelector('.oa-view').addEventListener('click', () => {
       dismiss(alert.id);

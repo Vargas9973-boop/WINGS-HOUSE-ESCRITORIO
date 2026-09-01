@@ -11,6 +11,7 @@ async function loadSettings() {
   // Fallback a habilitado: una instalación existente sin este ajuste guardado
   // debe seguir imprimiendo igual que antes de que existiera el toggle.
   document.getElementById('set-printer-enabled').checked = settings.printer_enabled !== 'false';
+  document.getElementById('set-cash-drawer-enabled').checked = settings.cash_drawer_enabled !== 'false';
 
   let paydayNumber = 6;
   if (settings.payroll_payday) {
@@ -356,6 +357,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     printer_name: document.getElementById('set-printer-name').value,
     ticket_width: document.getElementById('set-ticket-width').value,
     printer_enabled: document.getElementById('set-printer-enabled').checked ? 'true' : 'false',
+    cash_drawer_enabled: document.getElementById('set-cash-drawer-enabled').checked ? 'true' : 'false',
     payroll_payday: JSON.stringify({ day: PAYROLL_DAY_NAMES[paydayNumber], day_number: paydayNumber }),
     payroll_work_days_per_week: document.getElementById('set-payroll-work-days').value === '7' ? '7' : '6',
     biometric_enabled: JSON.stringify({

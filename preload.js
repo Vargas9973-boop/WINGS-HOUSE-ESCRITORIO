@@ -129,6 +129,10 @@ contextBridge.exposeInMainWorld('db', {
     getAll: () => call('productModifierGroups:getAll'),
     set: (productId, groupName, enabled, qty) => call('productModifierGroups:set', productId, groupName, enabled, qty)
   },
+  promotionModifierGroups: {
+    getAll: () => call('promotionModifierGroups:getAll'),
+    set: (promotionId, groupName, enabled, qty) => call('promotionModifierGroups:set', promotionId, groupName, enabled, qty)
+  },
   productComponents: {
     getForProduct: (productId) => call('productComponents:getForProduct', productId),
     setForProduct: (productId, rows) => call('productComponents:setForProduct', productId, rows),
@@ -191,7 +195,8 @@ contextBridge.exposeInMainWorld('corteAPI', {
   addMovimiento: (data) => call('corte:addMovimiento', data),
   removeMovimiento: (id) => call('corte:removeMovimiento', id),
   cerrar: (fecha, efectivoReal) => call('corte:cerrar', fecha, efectivoReal),
-  getByFecha: (fecha) => call('corte:getByFecha', fecha)
+  getByFecha: (fecha) => call('corte:getByFecha', fecha),
+  openCashDrawer: (adminUsername, adminPassword) => call('cashdrawer:openManual', adminUsername, adminPassword)
 });
 
 contextBridge.exposeInMainWorld('reportsAPI', {
@@ -210,6 +215,13 @@ contextBridge.exposeInMainWorld('printerAPI', {
   list: () => call('printers:list'),
   printTicket: (saleId) => call('print:ticket', saleId),
   test: () => call('printer:test')
+});
+
+// Ticket de cocina de respaldo (independiente del KDS, ver main.js
+// kitchen:printTicket) -- disponible desde el banner de alerta de comanda
+// nueva y desde la pantalla de mesa en Comandas.
+contextBridge.exposeInMainWorld('kitchenTicketAPI', {
+  print: (saleId) => call('kitchen:printTicket', saleId)
 });
 
 contextBridge.exposeInMainWorld('biometricAPI', {

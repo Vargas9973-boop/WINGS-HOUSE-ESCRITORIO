@@ -24,6 +24,7 @@ const DEFAULT_NAME_PLACEHOLDER = 'Ej. Papas Gajo';
 
 let products = [];
 let promotions = [];
+let promotionModifierGroups = [];
 let inventoryOptions = [];
 let productIdsWithRecipe = new Set();
 let recipeCostsByProduct = {};
@@ -55,12 +56,14 @@ async function loadRecipeSupportData() {
 // ---------------- MODIFICADORES (salsas) ----------------
 async function loadModifiersData() {
   try {
-    const [mods, pmg] = await Promise.all([
+    const [mods, pmg, promg] = await Promise.all([
       window.db.modifiers.list(), // sin groupName: trae todos
-      window.db.productModifierGroups.getAll()
+      window.db.productModifierGroups.getAll(),
+      window.db.promotionModifierGroups.getAll()
     ]);
     modifiers = mods;
     productModifierGroups = pmg;
+    promotionModifierGroups = promg;
   } catch (err) {
     console.error('No se pudieron cargar los modificadores:', err);
   }
@@ -72,6 +75,18 @@ function productHasSaucesGroup(productId) {
 
 function saucesGroupQty(productId) {
   const row = productModifierGroups.find((r) => r.product_id === productId && r.group_name === 'Salsas');
+  return row ? Math.max(1, Number(row.qty) || 1) : 1;
+}
+
+// Mismo par de helpers que arriba, pero para promotion_modifier_groups (ver
+// 20260901000000_promotion_modifier_groups.sql) -- promociones/paquetes
+// viven en su propia tabla, sin relación con products.
+function promoHasSaucesGroup(promotionId) {
+  return promotionModifierGroups.some((r) => r.promotion_id === promotionId && r.group_name === 'Salsas');
+}
+
+function promoSaucesGroupQty(promotionId) {
+  const row = promotionModifierGroups.find((r) => r.promotion_id === promotionId && r.group_name === 'Salsas');
   return row ? Math.max(1, Number(row.qty) || 1) : 1;
 }
 
@@ -404,6 +419,10 @@ document.getElementById('product-sauces-group').addEventListener('change', (e) =
   document.getElementById('product-sauces-qty-wrap').style.display = e.target.checked ? 'flex' : 'none';
 });
 
+document.getElementById('promo-sauces-group').addEventListener('change', (e) => {
+  document.getElementById('promo-sauces-qty-wrap').style.display = e.target.checked ? 'flex' : 'none';
+});
+
 async function openProductModal(id = null) {
   const p = id ? products.find((x) => x.id === id) : null;
   document.getElementById('product-modal-title').textContent = p ? 'Editar producto' : 'Nuevo producto';
@@ -628,6 +647,10 @@ function openPromoModal(id = null) {
   document.getElementById('promo-price').value = p ? p.price : '';
   document.getElementById('promo-active').value = p ? String(p.active) : '1';
   document.getElementById('promo-category').value = p && p.applicable_category ? p.applicable_category : '';
+  const hasSauces = p ? promoHasSaucesGroup(p.id) : false;
+  document.getElementById('promo-sauces-group').checked = hasSauces;
+  document.getElementById('promo-sauces-qty').value = p ? promoSaucesGroupQty(p.id) : 1;
+  document.getElementById('promo-sauces-qty-wrap').style.display = hasSauces ? 'flex' : 'none';
   openModal('promo-modal');
 }
 
@@ -648,16 +671,29 @@ document.getElementById('btn-save-promo').addEventListener('click', async () => 
   }
 
   const data = { name, description, price: Number(price), active, applicable_category: applicableCategory };
+  const saucesEnabled = document.getElementById('promo-sauces-group').checked;
+  const saucesQty = Math.max(1, Number(document.getElementById('promo-sauces-qty').value) || 1);
 
   try {
-    if (id) {
-      await window.db.promotions.update(Number(id), data);
+    let promotionId = id ? Number(id) : null;
+    if (promotionId) {
+      await window.db.promotions.update(promotionId, data);
       toast('Promoción actualizada.', 'success');
     } else {
-      await window.db.promotions.create(data);
+      const created = await window.db.promotions.create(data);
+      promotionId = created.id;
       toast('Promoción creada.', 'success');
     }
+
+    try {
+      await window.db.promotionModifierGroups.set(promotionId, 'Salsas', saucesEnabled, saucesQty);
+    } catch (modErr) {
+      console.error('No se pudo actualizar el grupo de modificadores de la promoción:', modErr);
+      toast('La promoción se guardó, pero no se pudo actualizar la selección de salsa.', 'error');
+    }
+
     closeModal('promo-modal');
+    await loadModifiersData();
     loadPromotions();
   } catch (err) {
     toast('No se pudo guardar la promoción.', 'error');

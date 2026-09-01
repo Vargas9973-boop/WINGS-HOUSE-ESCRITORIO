@@ -266,6 +266,43 @@ async function login(username, password) {
   };
 }
 
+// Verifica usuario+contraseña de un admin SIN tocar la sesión activa del
+// cajero -- a diferencia de login(), nunca llama a supabase.auth.setSession,
+// así que auth.uid() en el resto de la app sigue siendo el cajero logueado.
+// Se usa para autorizaciones puntuales (p.ej. abrir el cajón manualmente
+// desde Corte de Caja) donde solo hace falta confirmar que quien aprueba es
+// admin, no cambiar quién tiene la sesión abierta.
+async function verifyAdminCredentials(username, password) {
+  const cleanUsername = String(username || '').trim().toLowerCase();
+  const body = {
+    identifier: cleanUsername,
+    password: password || '',
+    branchId: getCurrentBranchIdOrNull()
+  };
+
+  let { data, error } = await invokeLoginFunction(body);
+  if (error && error.context && error.context.status !== 401) {
+    ({ data, error } = await invokeLoginFunction(body));
+  }
+
+  if (error) {
+    let serverMsg = null;
+    try {
+      const respBody = await error.context.json();
+      serverMsg = respBody && respBody.error;
+    } catch (_) {}
+    throw new Error(serverMsg || 'Usuario o contraseña incorrectos.');
+  }
+  if (!data || !data.profile) {
+    throw new Error('No se pudo verificar el usuario.');
+  }
+  if (data.profile.role !== 'admin') {
+    throw new Error('Ese usuario no tiene permisos de administrador.');
+  }
+
+  return { displayName: data.profile.displayName, username: data.profile.username };
+}
+
 async function logout() {
   await supabase.auth.signOut();
   return true;
@@ -1239,11 +1276,15 @@ async function comandaAddItem(saleId, item) {
   // Con salsa(s) elegidas: comanda_add_item no soporta modificadores (fue
   // pensada solo para producto+cantidad), así que este caso se resuelve
   // aparte con inserción directa en sale_items + sale_item_modifiers, sin
-  // tocar el RPC para no romper el flujo normal sin modificadores.
+  // tocar el RPC para no romper el flujo normal sin modificadores. Una
+  // promoción/paquete puede pedir salsa(s) igual que un producto (ver
+  // promotion_modifier_groups) -- itemType decide en qué catálogo se busca
+  // el nombre/precio real.
   if (Array.isArray(item.modifierIds) && item.modifierIds.length > 0) {
     return comandaAddItemWithModifiers(
       saleId,
       item.id ?? item.productId ?? item.ref_id,
+      item.itemType || item.item_type || 'product',
       item.quantity,
       item.modifierIds,
       item.notes || null
@@ -1273,22 +1314,27 @@ async function comandaAddItem(saleId, item) {
 // cada salsa (modifiers.qty_needed * cantidad) lo hace
 // trg_sale_item_modifiers_after_insert automáticamente al insertar en
 // sale_item_modifiers -- aquí no se toca inventory directamente.
-async function comandaAddItemWithModifiers(saleId, productId, qty, modifierIds, notes) {
-  // products ya no admite SELECT directo para anon (20260820000012) --
-  // se resuelve vía la misma RPC que usa getAllProducts().
-  const products = await getAllProducts();
-  const product = products.find((p) => p.id === productId);
-  if (!product) throw new Error('Producto no encontrado');
+async function comandaAddItemWithModifiers(saleId, refId, itemType, qty, modifierIds, notes) {
+  // products/promotions ya no admiten SELECT directo para anon
+  // (20260820000012) -- se resuelven vía las mismas RPC que usan
+  // getAllProducts()/getAllPromotions(). itemType decide en cuál catálogo
+  // buscar el nombre/precio real: antes esto asumía siempre 'product', así
+  // que una promo/paquete con salsas nunca encontraba coincidencia (o peor,
+  // podía chocar con un producto que compartiera el mismo id numérico).
+  const isPromo = itemType === 'promo';
+  const catalog = isPromo ? await getAllPromotions() : await getAllProducts();
+  const catalogItem = catalog.find((p) => p.id === refId);
+  if (!catalogItem) throw new Error(isPromo ? 'Promoción no encontrada' : 'Producto no encontrado');
 
   const quantity = Math.max(1, Number(qty) || 1);
-  const unitPrice = Number(product.price) || 0;
+  const unitPrice = Number(catalogItem.price) || 0;
 
   const { data: sale, error } = await supabase.rpc('comanda_add_item_with_modifiers', {
     p_branch_id: getCurrentBranchId(),
     p_sale_id: saleId,
-    p_ref_id: productId,
-    p_item_type: 'product',
-    p_name: product.name,
+    p_ref_id: refId,
+    p_item_type: isPromo ? 'promo' : 'product',
+    p_name: catalogItem.name,
     p_unit_price: unitPrice,
     p_quantity: quantity,
     p_modifier_ids: modifierIds && modifierIds.length ? modifierIds : null,
@@ -1394,6 +1440,28 @@ async function setProductModifierGroup(productId, groupName, enabled, qty = 1) {
     p_qty: Math.max(1, Number(qty) || 1)
   });
   must(error, 'No se pudo actualizar el grupo de modificadores');
+  return true;
+}
+
+// Espejo de getAllProductModifierGroups/setProductModifierGroup pero para
+// promotions (tabla propia, sin relación con products -- ver
+// 20260901000000_promotion_modifier_groups.sql). Mismo contrato: N salsas
+// distintas por promoción, sin cantidades por salsa.
+async function getAllPromotionModifierGroups() {
+  const { data, error } = await supabase.rpc('get_promotion_modifier_groups_by_branch', { p_branch_id: getCurrentBranchId() });
+  must(error, 'No se pudieron obtener los grupos de modificadores por promoción');
+  return data || [];
+}
+
+async function setPromotionModifierGroup(promotionId, groupName, enabled, qty = 1) {
+  const { error } = await supabase.rpc('set_promotion_modifier_group', {
+    p_branch_id: getCurrentBranchId(),
+    p_promotion_id: promotionId,
+    p_group_name: groupName,
+    p_enabled: !!enabled,
+    p_qty: Math.max(1, Number(qty) || 1)
+  });
+  must(error, 'No se pudo actualizar el grupo de modificadores de la promoción');
   return true;
 }
 
@@ -3293,6 +3361,7 @@ module.exports = {
   localDayEndUtcIso,
   // auth / cuentas
   login,
+  verifyAdminCredentials,
   logout,
   changePassword,
   getAllUsers,
@@ -3340,6 +3409,8 @@ module.exports = {
   updateModifier,
   getAllProductModifierGroups,
   setProductModifierGroup,
+  getAllPromotionModifierGroups,
+  setPromotionModifierGroup,
   // combos
   getComponentsForProduct,
   setComponentsForProduct,
