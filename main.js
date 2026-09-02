@@ -26,6 +26,12 @@ const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 autoUpdater.logger = log;
 log.transports.file.level = 'info';
+// Por defecto electron-updater instala la actualización descargada al
+// cerrarse la app, SIN pasar por el diálogo "Reiniciar ahora / Después" de
+// abajo si el usuario nunca llegó a contestarlo (cierre inesperado, crash,
+// etc.) -- se desactiva para que instalar sea siempre una decisión explícita
+// del usuario vía ese diálogo (autoUpdater.quitAndInstall()).
+autoUpdater.autoInstallOnAppQuit = false;
 
 let mainWindow;
 let currentSession = null; // { id, username, displayName, role }
