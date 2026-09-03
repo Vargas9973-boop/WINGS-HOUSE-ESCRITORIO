@@ -1582,6 +1582,7 @@ btnPrintKitchen?.addEventListener('click', async () => {
     return;
   }
   btnPrintKitchen.disabled = true;
+  showLoadingOverlay('Imprimiendo comanda…');
   try {
     const result = await window.kitchenTicketAPI.print(currentSaleId);
     if (result && result.success) {
@@ -1589,12 +1590,18 @@ btnPrintKitchen?.addEventListener('click', async () => {
     } else if (result && result.reason === 'disabled') {
       toast('La impresión está deshabilitada en Ajustes -> Impresión.', 'error');
     } else {
-      toast('No se pudo imprimir el ticket de cocina.', 'error');
+      // Ya se reintentó una vez en el proceso principal (ver
+      // printKitchenTicket en main.js) antes de llegar aquí como fallo
+      // definitivo -- se muestra el motivo para no repetir el caso #62
+      // (falla silenciosa sin rastro).
+      const detail = result && result.reason ? ` (${result.reason})` : '';
+      toast(`No se pudo imprimir el ticket de cocina${detail}. Verifica la impresora e inténtalo de nuevo.`, 'error');
     }
   } catch (err) {
-    toast('No se pudo imprimir el ticket de cocina.', 'error');
+    toast(`No se pudo imprimir el ticket de cocina: ${err.message || 'error desconocido'}.`, 'error');
   } finally {
     btnPrintKitchen.disabled = false;
+    hideLoadingOverlay();
   }
 });
 
@@ -1801,6 +1808,12 @@ document
   .addEventListener(
     'click',
     async () => {
+      // Capa de "Cobrando…" (ver withLoading/showLoadingOverlay en
+      // common.js): cubre toda la pantalla e intercepta un segundo clic
+      // mientras closeTable() sigue en curso, evitando cobrar la misma
+      // mesa dos veces si el cajero da doble clic.
+      showLoadingOverlay('Cobrando…');
+      try {
 
       const total =
         currentItems.reduce(
@@ -1891,6 +1904,20 @@ document
               );
             }
 
+            // El ticket puede imprimir bien y aun así el cajón no abrir (ver
+            // kickCashDrawer en main.js) -- se avisa aparte para que el
+            // cajero lo note en el momento y lo abra a mano, en vez de que
+            // el cliente lo reporte después.
+            if (
+              printResult.cashDrawer &&
+              !printResult.cashDrawer.success
+            ) {
+              toast(
+                'El ticket imprimió pero el cajón no abrió automáticamente. Ábrelo manualmente y avisa a soporte.',
+                'error'
+              );
+            }
+
           } catch (err) {
 
             console.error(
@@ -1950,6 +1977,9 @@ document
         renderProducts();
       }
 
+      } finally {
+        hideLoadingOverlay();
+      }
     }
   );
 
@@ -2070,6 +2100,21 @@ document.addEventListener(
 
   }
 );
+
+// Otra instalación dio de alta/editó un producto o insumo -- fuerza a
+// releer el catálogo (mismo mecanismo que ya usan cierre/cancelación de
+// mesa para invalidarlo, ver `catalogLoaded = false` más arriba) y
+// re-renderiza la grilla si está visible. No toca la comanda en curso.
+window.catalogRealtimeAPI?.onChanged(async () => {
+  catalogLoaded = false;
+  try {
+    await ensureCatalog();
+    renderProducts();
+  } catch (err) {
+    console.error('No se pudo refrescar el catálogo tras un cambio remoto:', err);
+  }
+});
+
 // ==========================================================================
 // ATAJOS DE TECLADO ESPECÍFICOS DE COMANDAS (Ctrl+K/Ctrl+N/Alt+C) -- el
 // resto (F1-F9, Ctrl+S, Esc) los maneja common.js de forma genérica; estos

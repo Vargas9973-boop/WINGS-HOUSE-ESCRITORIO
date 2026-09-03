@@ -59,6 +59,96 @@ function toast(message, type = 'default') {
   }, 3200);
 }
 
+// ==========================================================================
+// CAPA DE "PROCESANDO…" -- bloquea clics mientras una operación async está
+// en curso (cobrar, imprimir, etc.), para evitar el doble clic más común:
+// disparar la misma acción dos veces antes de que la primera responda (p.ej.
+// doble cobro de una mesa, doble impresión). Al cubrir toda la pantalla con
+// pointer-events activos, el propio overlay intercepta el segundo clic sobre
+// el botón -- no hace falta una bandera aparte de "ya en curso".
+// Un contador de referencias soporta llamadas que se solapen (p.ej. una
+// operación que dispara otra por dentro) sin ocultarla antes de tiempo.
+// ==========================================================================
+let __loadingOverlayCount = 0;
+
+function ensureLoadingOverlayStyles() {
+  if (document.getElementById('loading-overlay-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'loading-overlay-styles';
+  style.textContent = `
+    #app-loading-overlay {
+      position: fixed; inset: 0; z-index: 1000000;
+      background: rgba(0,0,0,0.45);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.12s ease;
+    }
+    #app-loading-overlay.show { opacity: 1; pointer-events: all; }
+    #app-loading-overlay .loading-spinner {
+      width: 44px; height: 44px;
+      border: 4px solid rgba(255,255,255,0.25);
+      border-top-color: #ff8a00;
+      border-radius: 50%;
+      animation: app-loading-spin 0.8s linear infinite;
+    }
+    #app-loading-overlay .loading-text {
+      color: #fff; font-size: 0.95rem; font-weight: 600;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+    @keyframes app-loading-spin { to { transform: rotate(360deg); } }
+  `;
+  document.head.appendChild(style);
+}
+
+function ensureLoadingOverlayEl() {
+  ensureLoadingOverlayStyles();
+  let el = document.getElementById('app-loading-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'app-loading-overlay';
+    el.innerHTML = `
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Procesando…</div>
+    `;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function showLoadingOverlay(message = 'Procesando…') {
+  const el = ensureLoadingOverlayEl();
+  el.querySelector('.loading-text').textContent = message;
+  __loadingOverlayCount++;
+  el.classList.add('show');
+}
+
+// hideLoadingOverlay() debe llamarse exactamente una vez por cada
+// showLoadingOverlay() (por eso withLoading() usa try/finally): con el
+// contador, si dos operaciones se solapan la capa no desaparece hasta que
+// ambas terminan.
+function hideLoadingOverlay() {
+  __loadingOverlayCount = Math.max(0, __loadingOverlayCount - 1);
+  if (__loadingOverlayCount === 0) {
+    document.getElementById('app-loading-overlay')?.classList.remove('show');
+  }
+}
+
+// Patrón recomendado para cualquier botón que dispare una petición al
+// proceso principal/Supabase y no deba poder dispararse dos veces mientras
+// la primera sigue en curso: withLoading(() => tuOperacionAsync(), 'Texto…').
+async function withLoading(fn, message = 'Procesando…') {
+  showLoadingOverlay(message);
+  try {
+    return await fn();
+  } finally {
+    hideLoadingOverlay();
+  }
+}
+window.showLoadingOverlay = showLoadingOverlay;
+window.hideLoadingOverlay = hideLoadingOverlay;
+window.withLoading = withLoading;
+
 function openModal(id) {
   document.getElementById(id)?.classList.add('show');
 }

@@ -78,6 +78,7 @@ const CATEGORY_LABELS = {
   papas: 'Papas',
   acompanantes: 'Acompañantes',
   bebidas: 'Bebidas',
+  frappes: 'Frappés',
   extras: 'Extras'
 };
 
@@ -1190,6 +1191,14 @@ amountReceivedInput.addEventListener('input', () => {
 });
 
 btnConfirmCheckout.addEventListener('click', async () => {
+  // Capa de "Procesando…" (ver withLoading/showLoadingOverlay en common.js):
+  // cubre toda la pantalla desde el primer clic, antes incluso de las
+  // validaciones/consultas async de más abajo (getDailyConsumption, etc.),
+  // que antes dejaban una ventana en la que un doble clic podía disparar
+  // dos veces window.db.sales.create() -- btnConfirmCheckout.disabled solo
+  // se ponía en true justo antes de esa llamada, no desde el clic inicial.
+  showLoadingOverlay('Procesando venta…');
+  try {
   const { subtotal, discount, total } = cartTotals();
 
   // Defensa en profundidad: addToCart ya rechaza precios inválidos al
@@ -1470,6 +1479,16 @@ btnConfirmCheckout.addEventListener('click', async () => {
       console.warn('Impresión no completada:', result);
     }
 
+    // El ticket puede imprimir bien y aun así el cajón no abrir (ver
+    // kickCashDrawer en main.js) -- se avisa aparte para que el cajero lo
+    // note en el momento y lo abra a mano.
+    if (result && result.cashDrawer && !result.cashDrawer.success) {
+      toast(
+        'El ticket imprimió pero el cajón no abrió automáticamente. Ábrelo manualmente y avisa a soporte.',
+        'error'
+      );
+    }
+
   } catch (printErr) {
     console.error('Error de impresión:', printErr);
   }
@@ -1491,6 +1510,9 @@ btnConfirmCheckout.addEventListener('click', async () => {
     loadCatalog();
   } finally {
     btnConfirmCheckout.disabled = false;
+  }
+  } finally {
+    hideLoadingOverlay();
   }
 });
 
@@ -1515,5 +1537,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   ensureEmployeeSelector();
   updateEmployeeSelectorVisibility();
   loadCatalog();
-  
+
+});
+
+// Otra instalación dio de alta/editó un producto o insumo -- refresca el
+// catálogo del POS solo (ver preload.js::catalogRealtimeAPI). No toca el
+// carrito en curso, solo la lista de productos/disponibilidad.
+window.catalogRealtimeAPI?.onChanged(() => {
+  loadCatalog();
 });

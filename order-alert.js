@@ -207,9 +207,18 @@
       printBtn.textContent = 'Imprimiendo…';
       try {
         const result = await window.kitchenTicketAPI.print(alert.id);
-        printBtn.textContent = result && result.success ? '✅ Impreso' : '❌ Error';
+        if (result && result.success) {
+          printBtn.textContent = '✅ Impreso';
+          printBtn.title = '';
+        } else {
+          printBtn.textContent = '❌ Error';
+          printBtn.title = result && result.reason
+            ? `No se pudo imprimir: ${result.reason}`
+            : 'No se pudo imprimir el ticket de cocina.';
+        }
       } catch (err) {
         printBtn.textContent = '❌ Error';
+        printBtn.title = err.message || 'No se pudo imprimir el ticket de cocina.';
       } finally {
         setTimeout(() => {
           if (printBtn.isConnected) {

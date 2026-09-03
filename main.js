@@ -222,6 +222,17 @@ function broadcastRealtimeStatus() {
   }
 }
 
+// Avisa a la ventana principal que products/inventory cambiaron (Realtime,
+// ver db.js::subscribeToCatalogChanges) -- solo mainWindow, el KDS no
+// consume catálogo/inventario. El renderer que esté cargado (catálogo,
+// inventario, POS o comandas) decide qué recargar; este evento no trae
+// payload a propósito, mismo criterio simple que refreshKdsWindow().
+function broadcastCatalogChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('catalog:changed');
+  }
+}
+
 // row puede venir de Realtime (viaFallback=false) o del polling de respaldo
 // del renderer cuando Realtime está caído (viaFallback=true). En ambos casos
 // pasa por el mismo filtro de duplicados.
@@ -613,6 +624,7 @@ app.whenReady().then(async () => {
       broadcastRealtimeStatus();
     });
     db.subscribeToKdsChanges(() => refreshKdsWindow());
+    db.subscribeToCatalogChanges(() => broadcastCatalogChanged());
   }
   registerIpcHandlers();
   createWindow();
@@ -802,6 +814,7 @@ function registerIpcHandlers() {
         broadcastRealtimeStatus();
       });
       db.subscribeToKdsChanges(() => refreshKdsWindow());
+      db.subscribeToCatalogChanges(() => broadcastCatalogChanged());
     }
 
     // Onboarding del secreto de KDS (ver 20260822190000_kds_secret_hotfix.sql
@@ -1101,7 +1114,10 @@ function registerIpcHandlers() {
 
     const result = await kickCashDrawer(printerName);
     if (!result.success) {
-      throw new Error('No se pudo abrir el cajón. Verifica que la impresora esté compartida en Windows con ese mismo nombre.');
+      const hint = result.reason === 'printer-not-shared'
+        ? `La impresora "${printerName}" no está compartida en Windows.`
+        : 'Verifica que la impresora esté compartida en Windows con ese mismo nombre.';
+      throw new Error(`No se pudo abrir el cajón. ${hint}`);
     }
     return result;
   });
@@ -1115,13 +1131,17 @@ function registerIpcHandlers() {
   // hay forma de que salga desfasado o repetido. Solo imprime: no marca
   // nada en la venta, no cambia kitchen_status, no abre el cajón.
   safeHandle('kitchen:printTicket', async (saleId) => {
+    console.log(`🖨️ [cocina] Solicitud de impresión de comanda para venta #${saleId}.`);
+
     const sale = await db.getSaleById(saleId);
     if (!sale) {
+      console.error(`🖨️ [cocina] Venta #${saleId} no encontrada al intentar imprimir la comanda.`);
       throw new Error(`Comanda no encontrada con ID: ${saleId}`);
     }
 
     const settings = await db.getAllSettings();
     if (!isPrinterEnabled(settings)) {
+      console.warn(`🖨️ [cocina] Impresión deshabilitada en Ajustes -> Impresión; se omite venta #${saleId}.`);
       return { success: false, reason: 'disabled' };
     }
 
@@ -1357,9 +1377,17 @@ safeHandle('print:ticket', async (saleId) => {
 
     // Solo el ticket de venta (público general/empleado interno) abre el
     // cajón -- el corte de caja usa su propio handler (corte:printTicket) y
-    // no pasa por aquí.
+    // no pasa por aquí. Se espera el resultado (antes era "dispara y
+    // olvida") y se adjunta a la respuesta para que comandas-renderer.js/
+    // sales-renderer.js puedan avisarle al cajero en el momento si el
+    // ticket imprimió pero el cajón no abrió, en vez de que quede en
+    // silencio hasta que el cliente lo reporte después.
     if (isCashDrawerEnabled(settings)) {
-      kickCashDrawer(result.printer);
+      const drawerResult = await kickCashDrawer(result.printer);
+      result.cashDrawer = drawerResult;
+      if (!drawerResult.success) {
+        console.error(`🗄️ Venta #${saleId}: el ticket se imprimió pero el cajón NO abrió (${drawerResult.reason || 'motivo desconocido'}).`);
+      }
     }
   }
 
@@ -1630,43 +1658,111 @@ const CASH_DRAWER_KICK = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa]);
 // -> pestaña Compartir -> "Compartir esta impresora", dejando el nombre de
 // recurso compartido igual al nombre de la impresora tal cual aparece en
 // Ajustes -> Impresión).
-// Devuelve una promesa (resolve siempre true/false, nunca rechaza) para que
-// tanto el disparo automático (venta/corte, sin esperar el resultado) como
-// el botón manual (que sí necesita avisarle al usuario si falló) puedan
-// usar la misma función.
-function kickCashDrawer(printerName) {
+// Un solo intento de envío del pulso RAW al recurso compartido indicado.
+// Separado de kickCashDrawer() para que este pueda reintentar sin repetir
+// la escritura del archivo temporal.
+function kickCashDrawerOnce(shareTarget) {
     return new Promise((resolve) => {
-        if (!printerName) {
-            resolve({ success: false, reason: 'no-printer-configured' });
-            return;
-        }
-
         const tmpFile = path.join(app.getPath('temp'), 'wh-cash-drawer-kick.bin');
 
         fs.writeFile(tmpFile, CASH_DRAWER_KICK, (writeErr) => {
             if (writeErr) {
-                console.warn('🗄️ No se pudo escribir el archivo temporal del cajón:', writeErr.message);
                 resolve({ success: false, reason: writeErr.message });
                 return;
             }
 
-            const target = `\\\\localhost\\${printerName}`;
+            const target = `\\\\localhost\\${shareTarget}`;
 
             execFile('cmd.exe', ['/c', 'copy', '/b', tmpFile, target], (err) => {
                 if (err) {
-                    console.warn(
-                        '🗄️ No se pudo abrir el cajón en', printerName,
-                        '-- ¿está esa impresora compartida en Windows con ese mismo nombre?:',
-                        err.message
-                    );
                     resolve({ success: false, reason: err.message });
                 } else {
-                    console.log('🗄️ Pulso de apertura de cajón enviado a:', target);
-                    resolve({ success: true });
+                    resolve({ success: true, target });
                 }
             });
         });
     });
+}
+
+// Caso real (tenant 1, POS-8360 USB/LAN con el cajón por cable): el cliente
+// reportó que al cobrar la última venta el ticket SÍ imprimió pero el cajón
+// NO abrió. El ticket se manda por la vía normal de impresión de Windows
+// (webContents.print con deviceName = printer_name, el *Name* tal cual
+// aparece en Ajustes), pero el pulso del cajón viaja por una ruta UNC
+// aparte (\\localhost\<recurso compartido>) que depende de que esa
+// impresora esté COMPARTIDA en Windows con ese mismo nombre exacto. Si el
+// nombre del recurso compartido (ShareName) quedó distinto del Name --algo
+// común: Windows lo trunca/autogenera, o se compartió después con otro
+// nombre-- el ticket sigue imprimiendo perfecto (usa Name directo) y el
+// cajón nunca recibe el pulso, en silencio: exactamente el síntoma
+// reportado. resolvePrinterShareName() detecta y corrige ese desfase antes
+// de intentar el pulso.
+function resolvePrinterShareName(printerName) {
+    return new Promise((resolve) => {
+        const safeName = String(printerName).replace(/'/g, "''");
+        const psCmd = `Get-Printer -Name '${safeName}' | Select-Object Shared,ShareName | ConvertTo-Json -Compress`;
+
+        execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], { timeout: 5000 }, (err, stdout) => {
+            if (err) {
+                // Get-Printer no disponible/falló: no bloquea, sigue con el
+                // comportamiento de antes (usar printerName tal cual).
+                console.warn(`🗄️ No se pudo consultar "Compartir" de la impresora "${printerName}" (Get-Printer):`, err.message);
+                resolve({ shared: null, shareName: null });
+                return;
+            }
+            try {
+                const parsed = JSON.parse(String(stdout).trim());
+                resolve({ shared: !!parsed.Shared, shareName: parsed.ShareName || null });
+            } catch (parseErr) {
+                resolve({ shared: null, shareName: null });
+            }
+        });
+    });
+}
+
+const CASH_DRAWER_KICK_MAX_ATTEMPTS = 2;
+const CASH_DRAWER_KICK_RETRY_DELAY_MS = 500;
+
+// Devuelve una promesa (resolve siempre con {success, reason?, attempts},
+// nunca rechaza) para que tanto el disparo automático (venta/corte, sin
+// esperar el resultado) como el botón manual (que sí necesita avisarle al
+// usuario si falló) puedan usar la misma función. Reintenta una vez ante un
+// fallo transitorio (impresora ocupada procesando el ticket que se acaba de
+// mandar) y corrige el nombre de recurso compartido si Windows lo reporta
+// distinto al configurado en Ajustes.
+async function kickCashDrawer(printerName) {
+    if (!printerName) {
+        console.warn('🗄️ No hay impresora configurada en Ajustes -> Impresión; no se puede abrir el cajón.');
+        return { success: false, reason: 'no-printer-configured' };
+    }
+
+    const shareInfo = await resolvePrinterShareName(printerName);
+    let target = printerName;
+
+    if (shareInfo.shared === false) {
+        console.error(`🗄️ La impresora "${printerName}" NO está compartida en Windows -- el cajón nunca puede abrir así aunque el ticket imprima bien. Compártela (Dispositivos e impresoras -> clic derecho sobre "${printerName}" -> Propiedades de impresora -> pestaña Compartir -> "Compartir esta impresora", dejando el nombre de recurso compartido igual a "${printerName}").`);
+        return { success: false, reason: 'printer-not-shared' };
+    }
+
+    if (shareInfo.shared === true && shareInfo.shareName && shareInfo.shareName !== printerName) {
+        console.warn(`🗄️ La impresora "${printerName}" está compartida con un nombre distinto ("${shareInfo.shareName}"); se usa ese nombre real para el pulso del cajón en vez del configurado en Ajustes.`);
+        target = shareInfo.shareName;
+    }
+
+    let lastResult = null;
+    for (let attempt = 1; attempt <= CASH_DRAWER_KICK_MAX_ATTEMPTS; attempt++) {
+        lastResult = await kickCashDrawerOnce(target);
+        if (lastResult.success) {
+            console.log(`🗄️ Pulso de apertura de cajón enviado a \\\\localhost\\${target} (intento ${attempt}/${CASH_DRAWER_KICK_MAX_ATTEMPTS}).`);
+            return { ...lastResult, attempts: attempt };
+        }
+        console.warn(`🗄️ Intento ${attempt}/${CASH_DRAWER_KICK_MAX_ATTEMPTS} de abrir el cajón en "${target}" falló: ${lastResult.reason}`);
+        if (attempt < CASH_DRAWER_KICK_MAX_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, CASH_DRAWER_KICK_RETRY_DELAY_MS));
+        }
+    }
+    console.error(`🗄️ NO se pudo abrir el cajón (impresora "${printerName}"${target !== printerName ? `, recurso compartido "${target}"` : ''}) tras ${CASH_DRAWER_KICK_MAX_ATTEMPTS} intentos. ¿Está compartida en Windows con ese nombre? Motivo: ${lastResult.reason}`);
+    return { ...lastResult, attempts: CASH_DRAWER_KICK_MAX_ATTEMPTS };
 }
 
 function escapeHtmlMain(str) {
@@ -1739,7 +1835,10 @@ function buildKitchenTicketHtml(sale, settings) {
     </body></html>`;
 }
 
-function printKitchenTicket(sale, settings) {
+// Un solo intento de impresión (una ventana oculta, un webContents.print).
+// Separado de printKitchenTicket() para que este pueda reintentar sin
+// duplicar la creación/carga de la ventana.
+function attemptPrintKitchenTicket(sale, settings) {
     return new Promise((resolve) => {
         const win = new BrowserWindow({ show: false, width: 320, height: 600 });
         const html = buildKitchenTicketHtml(sale, settings);
@@ -1770,8 +1869,34 @@ function printKitchenTicket(sale, settings) {
                     finish({ success, reason: reason || null, printer: configuredPrinter || null });
                 });
             })
-            .catch((err) => finish({ success: false, reason: err.message }));
+            .catch((err) => finish({ success: false, reason: err.message, printer: configuredPrinter || null }));
     });
+}
+
+// Caso real (comanda #62, tenant 1): el ticket de cocina nunca llegó a
+// imprimirse y el fallo pasó inadvertido -- el botón (alerta o comanda) solo
+// mostraba un error genérico y no quedaba ningún rastro para diagnosticarlo
+// después. Aquí se reintenta una vez ante una falla transitoria del spooler
+// y se deja un log estructurado (éxito o fallo) de cada intento, sin cambiar
+// el resultado que ya consumen comandas-renderer.js/order-alert.js.
+const KITCHEN_PRINT_MAX_ATTEMPTS = 2;
+const KITCHEN_PRINT_RETRY_DELAY_MS = 800;
+
+async function printKitchenTicket(sale, settings) {
+    let lastResult = null;
+    for (let attempt = 1; attempt <= KITCHEN_PRINT_MAX_ATTEMPTS; attempt++) {
+        lastResult = await attemptPrintKitchenTicket(sale, settings);
+        if (lastResult.success) {
+            console.log(`🖨️ [cocina] Venta #${sale.id}: comanda impresa (intento ${attempt}/${KITCHEN_PRINT_MAX_ATTEMPTS}, impresora: ${lastResult.printer || 'diálogo'}).`);
+            return { ...lastResult, attempts: attempt };
+        }
+        console.warn(`🖨️ [cocina] Venta #${sale.id}: intento ${attempt}/${KITCHEN_PRINT_MAX_ATTEMPTS} falló (${lastResult.reason || 'motivo desconocido'}).`);
+        if (attempt < KITCHEN_PRINT_MAX_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, KITCHEN_PRINT_RETRY_DELAY_MS));
+        }
+    }
+    console.error(`🖨️ [cocina] Venta #${sale.id}: NO se pudo imprimir la comanda tras ${KITCHEN_PRINT_MAX_ATTEMPTS} intentos. Último motivo: ${lastResult.reason || 'desconocido'}.`);
+    return { ...lastResult, attempts: KITCHEN_PRINT_MAX_ATTEMPTS };
 }
 
 // Ticket de prueba para Ajustes -> Impresión -> "Imprimir prueba": imprime
