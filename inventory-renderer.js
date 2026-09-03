@@ -30,9 +30,9 @@ async function loadInventory() {
   inventory = items;
   productsUsingInsumo = {};
   (recipesRaw || []).forEach((r) => {
-    if (!r.products) return;
+    if (!r.product) return;
     if (!productsUsingInsumo[r.insumo_id]) productsUsingInsumo[r.insumo_id] = [];
-    productsUsingInsumo[r.insumo_id].push(r.products);
+    productsUsingInsumo[r.insumo_id].push(r.product);
   });
   renderCategoryOptions();
   renderKpis();
@@ -385,6 +385,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const session = await guardPermission('inventario', 'can_view');
   if (!session) return;
   init();
+});
+
+// Otra instalación dio de alta/editó un insumo (o un producto, que puede
+// afectar el uso-en-recetas mostrado aquí) -- refresca sola (ver
+// preload.js::catalogRealtimeAPI).
+window.catalogRealtimeAPI?.onChanged(() => {
+  loadInventory().catch((err) => console.error('No se pudo refrescar el inventario tras un cambio remoto:', err));
 });
 
 // Ctrl+N (ver common.js): "nuevo insumo" en este módulo.

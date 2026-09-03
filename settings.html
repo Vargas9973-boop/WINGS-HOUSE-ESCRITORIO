@@ -36,11 +36,26 @@
           </div>
           <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:10px;">
             <input type="checkbox" id="set-theme-auto" style="width:auto;">
-            <label for="set-theme-auto" style="margin:0;">Cambiar colores del sistema acorde al logotipo</label>
+            <label for="set-theme-auto" style="margin:0;">Personalizar los colores del sistema (botones y tarjetas del menú principal)</label>
           </div>
           <div class="field" style="grid-column: 1 / -1;">
-            <span style="font-size:0.78rem; color:var(--text-muted);">Colores detectados: </span>
+            <span style="font-size:0.78rem; color:var(--text-muted);">Colores actuales: </span>
             <span id="set-theme-preview" style="display:inline-flex; gap:6px; vertical-align:middle;"></span>
+          </div>
+          <div class="field" style="grid-column: 1 / -1; flex-direction:row; align-items:center; gap:20px; border-top:1px solid var(--border-color); padding-top:14px; margin-top:4px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="set-theme-primary" value="#ff9900" style="width:42px; height:32px; padding:2px; cursor:pointer;">
+              <label for="set-theme-primary" style="margin:0;">Color primario</label>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="set-theme-secondary" value="#e5231e" style="width:42px; height:32px; padding:2px; cursor:pointer;">
+              <label for="set-theme-secondary" style="margin:0;">Color secundario</label>
+            </div>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <span style="font-size:0.78rem; color:var(--text-muted);">
+              Colores básicos: elígelos a mano en vez de esperar a que se detecten del logo. Se aplican en cuanto los cambias -- Guardar los deja fijos.
+            </span>
           </div>
         </div>
       </div>

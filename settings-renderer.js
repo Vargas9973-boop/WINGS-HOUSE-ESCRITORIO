@@ -38,7 +38,13 @@ async function loadSettings() {
   document.getElementById('set-theme-auto').checked = settings.theme_auto === 'true';
   if (settings.theme_colors) {
     try {
-      renderThemePreview(JSON.parse(settings.theme_colors));
+      const savedColors = JSON.parse(settings.theme_colors);
+      renderThemePreview(savedColors);
+      // Precarga los selectores manuales con el último color guardado (venga
+      // de extracción del logo o de un pick manual anterior) para que abrir
+      // Ajustes no los regrese al naranja/rojo de fábrica sin razón.
+      if (savedColors.primary) document.getElementById('set-theme-primary').value = savedColors.primary;
+      if (savedColors.secondary) document.getElementById('set-theme-secondary').value = savedColors.secondary;
     } catch {
       // valor corrupto: sin preview, no rompe el resto del formulario
     }
@@ -301,6 +307,26 @@ document.getElementById('set-theme-auto').addEventListener('change', (e) => {
     restoreDefaultTheme();
   }
 });
+
+// Colores básicos (selección manual, ver settings.html) -- misma variable
+// pendingThemeColors/mismo --brand-orange/--brand-red que la extracción
+// automática del logo, así que ambos caminos terminan en el mismo lugar:
+// botones Y tarjetas del carrusel de inicio (ver .card en styles.css).
+// Elegir un color a mano también prende el checkbox maestro (theme_auto),
+// que en el guardado ya es el que decide "aplicar colores personalizados sí
+// o no" -- sin eso, el color elegido nunca se guardaría (ver btn-save-settings).
+function applyManualThemeColors() {
+  const primary = document.getElementById('set-theme-primary').value;
+  const secondary = document.getElementById('set-theme-secondary').value;
+  pendingThemeColors = { primary, secondary };
+  document.getElementById('set-theme-auto').checked = true;
+  renderThemePreview(pendingThemeColors);
+  document.documentElement.style.setProperty('--brand-orange', primary);
+  document.documentElement.style.setProperty('--brand-red', secondary);
+}
+
+document.getElementById('set-theme-primary').addEventListener('input', applyManualThemeColors);
+document.getElementById('set-theme-secondary').addEventListener('input', applyManualThemeColors);
 
 // Imprime de inmediato con la impresora/ancho seleccionados en pantalla
 // (aunque todavía no se hayan guardado), guardándolos primero, para que la

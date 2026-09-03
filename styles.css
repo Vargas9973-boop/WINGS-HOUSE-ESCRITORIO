@@ -148,7 +148,11 @@ body {
   min-width: 230px;
   max-width: 230px;
   height: 310px;
-  background: linear-gradient(135deg, #FF9900 0%, #D6292F 100%);
+  /* Usa las mismas variables que los botones (--brand-orange/--brand-red,
+     ver common.js::applyBrandingValues) para que "colores básicos" y
+     "ejecutar paleta de colores del logo" en Ajustes también recoloreen
+     estas tarjetas, no solo los botones. Fallbacks = colores originales. */
+  background: linear-gradient(135deg, var(--brand-orange, #FF9900) 0%, var(--brand-red, #D6292F) 100%);
   border: 3px solid #000000;
   border-radius: 20px;
   display: flex;
@@ -175,7 +179,11 @@ body {
   opacity: 1;
   transform: scale(1.08) translateZ(40px);
   border-color: #000000;
-  background: linear-gradient(135deg, #FEBE1E 0%, #FF6F1A 55%, #E5231E 100%);
+  /* Mismas 2 paradas que la tarjeta inactiva (no 3, para no depender de
+     --brand-orange-deep, que common.js::applyBrandingValues no sobreescribe
+     al aplicar una paleta personalizada) -- se distingue por brightness()/
+     scale()/shadow, no por un tercer tono fijo que quedaría desacoplado. */
+  background: linear-gradient(135deg, var(--brand-orange, #FF9900) 0%, var(--brand-red, #D6292F) 100%);
   filter: brightness(110%);
   box-shadow: 0 20px 35px rgba(255, 69, 0, 0.6);
 }

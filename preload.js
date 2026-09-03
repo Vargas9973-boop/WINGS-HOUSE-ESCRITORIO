@@ -187,6 +187,12 @@ contextBridge.exposeInMainWorld('orderAlertAPI', {
 contextBridge.exposeInMainWorld('kdsReadyAPI', {
   onReady: (cb) => ipcRenderer.on('kds:ready', (event, info) => cb(info))
 });
+// Avisa cuando products/inventory cambian en Supabase (otra instalación, u
+// otra sesión de esta misma) para que la pantalla activa se refresque sola
+// (ver main.js::broadcastCatalogChanged / db.js::subscribeToCatalogChanges).
+contextBridge.exposeInMainWorld('catalogRealtimeAPI', {
+  onChanged: (cb) => ipcRenderer.on('catalog:changed', () => cb())
+});
 
 contextBridge.exposeInMainWorld('corteAPI', {
   getResumen: (fecha) => call('corte:getResumen', fecha),

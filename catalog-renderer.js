@@ -6,6 +6,7 @@ const CATEGORY_LABELS = {
   papas: 'Papas',
   acompanantes: 'Acompañantes',
   bebidas: 'Bebidas',
+  frappes: 'Frappés',
   extras: 'Extras',
   combos: 'Combos/Promos'
 };
@@ -730,4 +731,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadProducts();
   loadPromotions();
   renderModifiers();
+});
+
+// Otra instalación (u otra pestaña de administración) dio de alta/editó un
+// producto o insumo -- refresca la tabla y el soporte de recetas sin que
+// haya que recargar la pantalla a mano (ver preload.js::catalogRealtimeAPI).
+window.catalogRealtimeAPI?.onChanged(async () => {
+  try {
+    await loadRecipeSupportData();
+    await loadProducts();
+  } catch (err) {
+    console.error('No se pudo refrescar el catálogo tras un cambio remoto:', err);
+  }
 });

@@ -28,10 +28,22 @@ body {
 .ticket .center { text-align: center; }
 .ticket .bold { font-weight: 700; }
 
+/* Mismo problema que el texto de arriba (-webkit-text-stroke): el logo que
+   sube cada negocio llega en full color con degradados/antialiasing (p.ej.
+   1254x1254px), y al reducirlo a 70px para el ticket una franja grande de
+   sus píxeles queda en gris intermedio. La térmica no imprime ese gris
+   suave -- lo ditherea, y es justo lo que se ve como "borroso". El filtro
+   fuerza casi todo el logo a blanco o negro puro ANTES de que Chromium lo
+   rasterice para imprimir, igual que el text-stroke hace con las letras.
+   Medido con logo_saas.png: 30% de píxeles en gris ambiguo sin filtro,
+   ~12% con este contraste. -webkit-optimize-contrast le pide a Chromium
+   priorizar nitidez sobre suavizado al hacer el downscale. */
 .ticket .logo {
   display: block;
   width: 70px;
   margin: 0 auto 6px;
+  filter: grayscale(1) contrast(2.5);
+  image-rendering: -webkit-optimize-contrast;
 }
 
 .ticket h1 {

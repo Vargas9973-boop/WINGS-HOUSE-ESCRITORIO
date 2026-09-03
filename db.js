@@ -1689,6 +1689,21 @@ function subscribeToKdsChanges(onChange) {
     .subscribe();
 }
 
+// Productos e insumos nuevos/editados desde OTRA instalación (u otra sesión
+// de esta misma) deben aparecer solos en catálogo/inventario/POS/comandas,
+// sin que el usuario tenga que recargar la pantalla a mano. Mismo patrón
+// simple que subscribeToKdsChanges: un solo callback, el llamador (main.js)
+// vuelve a pedir todo de nuevo en cada evento -- son tablas chicas, no vale
+// la pena parchear en el cliente. Requiere que products/inventory estén en
+// la publicación "supabase_realtime" (Database > Replication).
+function subscribeToCatalogChanges(onChange) {
+  return supabase
+    .channel('catalog-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'products', filter: `branch_id=eq.${getCurrentBranchId()}` }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory', filter: `branch_id=eq.${getCurrentBranchId()}` }, onChange)
+    .subscribe();
+}
+
 // ==========================================================================
 // 6. INVENTARIO
 // ==========================================================================
@@ -1845,7 +1860,8 @@ async function getAllRecipesWithStock() {
     product_id: r.product_id,
     insumo_id: r.insumo_id,
     quantity_needed: r.quantity_needed,
-    inventory: { id: r.insumo_id, name: r.insumo_name, unit: r.insumo_unit, stock: r.insumo_stock, min_stock: r.insumo_min_stock }
+    inventory: { id: r.insumo_id, name: r.insumo_name, unit: r.insumo_unit, stock: r.insumo_stock, min_stock: r.insumo_min_stock },
+    product: { id: r.product_id, name: r.product_name }
   }));
 }
 
@@ -3426,6 +3442,7 @@ module.exports = {
   getKdsOrders,
   updateKdsStatus,
   subscribeToKdsChanges,
+  subscribeToCatalogChanges,
   // inventario
   getAllInventory,
   createInventoryItem,
