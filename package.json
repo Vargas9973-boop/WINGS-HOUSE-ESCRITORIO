@@ -1,6 +1,6 @@
 {
   "name": "wings-house-admin",
-  "version": "2.2.5",
+  "version": "2.2.6",
   "description": "KATSAM Sistema de gestión para restaurantes - Ventas, Catálogo, Inventarios, Merma, Costos y Asistencia (Supabase)",
   "main": "main.js",
   "author": "KATSAM",
