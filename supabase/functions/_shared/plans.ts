@@ -15,19 +15,19 @@ export const PLAN_CATALOG: Record<PlanId, { label: string; price: number; billin
     label: "Esencial",
     price: 549,
     billingType: "monthly",
-    description: "1 sucursal, hasta 2 terminales. Ventas, comandas, catálogo, corte de caja, inventario, historial y cuentas.",
+    description: "1 sucursal, hasta 3 usuarios (ej. gerente, mesero, cajero). Ventas, comandas, catálogo, corte de caja, inventario, historial y cuentas.",
   },
   operacion_completa: {
     label: "Operación Completa",
     price: 899,
     billingType: "monthly",
-    description: "Hasta 5 terminales. Agrega cocina (KDS), costos y reportes avanzados.",
+    description: "Hasta 6 usuarios. Agrega cocina (KDS), costos y reportes avanzados.",
   },
   multisucursal: {
     label: "Multisucursal",
     price: 1499,
     billingType: "monthly",
-    description: "Sucursales y terminales ilimitadas. Agrega nómina, asistencia y soporte prioritario.",
+    description: "Usuarios ilimitados y acceso a todos los módulos (nómina, asistencia). Sigue siendo 1 sucursal -- sucursales adicionales se cotizan aparte.",
   },
 };
 
