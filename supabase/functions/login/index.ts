@@ -23,6 +23,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { modulesForPlan } from "../_shared/plans.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -186,6 +187,29 @@ Deno.serve(async (req) => {
       // login nunca debe fallar por esto -- mismo criterio que db.js.
     }
 
+    // Gating por plan (ver 20260905000000_tenants_plan_id.sql y
+    // _shared/plans.ts): qué módulos ve esta sesión según el plan de renta
+    // del tenant, resuelto vía branch -> tenant. Cualquier falla acá cae a
+    // modulesForPlan(null) (fail-open a plan completo) -- igual que
+    // permissions arriba, el login nunca debe romperse por esto.
+    let planId: string | null = null;
+    try {
+      const { data: branchRow, error: branchErr } = await admin
+        .from("branches")
+        .select("tenant:tenants(plan_id)")
+        .eq("id", user.branch_id)
+        .maybeSingle();
+      if (branchErr) {
+        console.error("No se pudo resolver el plan del tenant:", branchErr.message);
+      } else {
+        const tenant = branchRow?.tenant as { plan_id?: string } | { plan_id?: string }[] | null;
+        planId = Array.isArray(tenant) ? tenant[0]?.plan_id ?? null : tenant?.plan_id ?? null;
+      }
+    } catch (err) {
+      console.error("Error inesperado resolviendo el plan del tenant:", err instanceof Error ? err.message : err);
+    }
+    const allowedModules = modulesForPlan(planId);
+
     return json({
       session: {
         access_token: sessionData.session.access_token,
@@ -201,6 +225,8 @@ Deno.serve(async (req) => {
         roleId: user.role_id || null,
         branchId: user.branch_id,
         permissions,
+        planId,
+        allowedModules,
       },
     });
   } catch (err) {

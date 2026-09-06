@@ -775,6 +775,17 @@ function registerIpcHandlers() {
   // para cualquiera que no fuera 'admin'.
   function requirePermission(moduleName, action) {
     if (!currentSession) throw new Error('No hay sesión activa.');
+    // Gating por plan de renta (ver login/index.ts, _shared/plans.ts):
+    // aplica ANTES del rol y sin excepción para 'admin' -- a diferencia del
+    // permiso por rol (de qué puede hacer un empleado dentro de su propia
+    // empresa), esto es una restricción de facturación, el dueño de un plan
+    // chico tampoco debe poder operar un módulo que no pagó.
+    // allowedModules null/undefined (Edge Function vieja, o falló al
+    // resolver el plan) = sin restricción, nunca bloquea.
+    const allowed = currentSession.allowedModules;
+    if (Array.isArray(allowed) && !allowed.includes(moduleName)) {
+      throw new Error('Este módulo no está incluido en tu plan actual. Contacta a soporte para actualizarlo.');
+    }
     if (currentSession.role === 'admin') return;
     const perms = currentSession.permissions || [];
     const modPerm = perms.find((p) => p.module === moduleName);
@@ -1114,10 +1125,7 @@ function registerIpcHandlers() {
 
     const result = await kickCashDrawer(printerName);
     if (!result.success) {
-      const hint = result.reason === 'printer-not-shared'
-        ? `La impresora "${printerName}" no está compartida en Windows.`
-        : 'Verifica que la impresora esté compartida en Windows con ese mismo nombre.';
-      throw new Error(`No se pudo abrir el cajón. ${hint}`);
+      throw new Error(`No se pudo abrir el cajón. Verifica que "${printerName}" sea el nombre exacto de la impresora en Windows (Dispositivos e impresoras) y que esté encendida/conectada. Detalle: ${result.reason || 'motivo desconocido'}`);
     }
     return result;
   });
@@ -1647,21 +1655,103 @@ const CASH_DRAWER_KICK = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa]);
 // Se intentó primero con un módulo nativo (node-gyp) para hablar directo
 // con el spooler, pero su código C++ no compila contra el toolchain de
 // Visual Studio/Windows SDK instalado aquí (error en node_printer_win.cc) y
-// tampoco hay binario precompilado para esta versión de Node -- hubiera
-// dejado "npm run build" roto para todos los tenants. En su lugar se manda
-// el pulso con "copy /b" a la impresora COMPARTIDA en Windows
-// (\\localhost\NombreDeLaImpresora): es el mismo mecanismo con el que
-// Windows entrega un trabajo RAW al spooler, sin compilar nada.
+// tampoco hay binario precompilado para esta versión de Node.
 //
-// Requiere un paso único por sucursal: compartir esa impresora en Windows
-// (Dispositivos e impresoras -> click derecho -> Propiedades de impresora
-// -> pestaña Compartir -> "Compartir esta impresora", dejando el nombre de
-// recurso compartido igual al nombre de la impresora tal cual aparece en
-// Ajustes -> Impresión).
-// Un solo intento de envío del pulso RAW al recurso compartido indicado.
-// Separado de kickCashDrawer() para que este pueda reintentar sin repetir
-// la escritura del archivo temporal.
-function kickCashDrawerOnce(shareTarget) {
+// Luego se mandó el pulso con "copy /b" a la impresora COMPARTIDA en
+// Windows (\\localhost\NombreDeLaImpresora). Se abandonó (tenant 1,
+// POS-8360 USB): esa ruta depende de que "Compartir impresoras" esté
+// habilitado a nivel de Windows, y en instalaciones reales la pestaña
+// "Compartir" ni siquiera aparece en Propiedades de la impresora (la
+// función de red no está disponible/habilitada ahí) -- no hay forma de
+// dejarla compartida, así que el cajón nunca podía abrir aunque el ticket
+// imprimiera perfecto (ese sí va por la vía normal de impresión de
+// Windows, sin pasar por esto).
+//
+// La impresora con el cable del cajón suele ser USB local (como en este
+// caso), así que hace falta un camino que no dependa de red para nada: se
+// llama directo a la API del spooler de Windows (winspool.drv:
+// OpenPrinter/StartDocPrinter/WritePrinter) vía un P/Invoke hecho en
+// PowerShell (Add-Type -Language CSharp) -- sin compilar nada y sin
+// necesitar que la impresora esté compartida. Es el mismo mecanismo con el
+// que cualquier software POS (incl. el sistema anterior del cliente,
+// Eleventa) manda el pulso a una impresora térmica USB.
+const RAW_PRINT_HELPER_PS1 = path.join(app.getPath('temp'), 'wh-raw-print-helper.ps1');
+const RAW_PRINT_HELPER_SOURCE = `param(
+    [Parameter(Mandatory=$true)][string]$PrinterName,
+    [Parameter(Mandatory=$true)][string]$DataFile
+)
+$ErrorActionPreference = 'Stop'
+$cs = @"
+using System;
+using System.Runtime.InteropServices;
+public class WHRawPrinter {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA {
+        [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+    }
+    [DllImport("winspool.Drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+    [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+    [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+    public static bool SendBytes(string printerName, byte[] bytes) {
+        IntPtr hPrinter;
+        if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) return false;
+        try {
+            DOCINFOA di = new DOCINFOA();
+            di.pDocName = "WingsHouse Cash Drawer Kick";
+            di.pDataType = "RAW";
+            if (!StartDocPrinter(hPrinter, 1, di)) return false;
+            try {
+                if (!StartPagePrinter(hPrinter)) return false;
+                IntPtr pUnmanaged = Marshal.AllocHGlobal(bytes.Length);
+                try {
+                    Marshal.Copy(bytes, 0, pUnmanaged, bytes.Length);
+                    int written;
+                    bool ok = WritePrinter(hPrinter, pUnmanaged, bytes.Length, out written);
+                    EndPagePrinter(hPrinter);
+                    return ok && written == bytes.Length;
+                } finally { Marshal.FreeHGlobal(pUnmanaged); }
+            } finally { EndDocPrinter(hPrinter); }
+        } finally { ClosePrinter(hPrinter); }
+    }
+}
+"@
+Add-Type -TypeDefinition $cs -Language CSharp
+$bytes = [System.IO.File]::ReadAllBytes($DataFile)
+$ok = [WHRawPrinter]::SendBytes($PrinterName, $bytes)
+if (-not $ok) {
+    Write-Error "WritePrinter failed for '$PrinterName'"
+    exit 1
+}
+exit 0
+`;
+
+function ensureRawPrintHelperScript() {
+    // Contenido estático -- se escribe una sola vez (o si falta), no hace
+    // falta reescribirlo en cada pulso.
+    if (!fs.existsSync(RAW_PRINT_HELPER_PS1)) {
+        fs.writeFileSync(RAW_PRINT_HELPER_PS1, RAW_PRINT_HELPER_SOURCE, 'utf8');
+    }
+}
+
+// Un solo intento de envío del pulso RAW directo a la impresora LOCAL (por
+// nombre de cola de Windows, el mismo *Name* configurado en Ajustes ->
+// Impresión). No requiere que la impresora esté compartida ni que haya red
+// de por medio -- funciona igual para USB, LPT o red.
+function kickCashDrawerOnce(printerName) {
     return new Promise((resolve) => {
         const tmpFile = path.join(app.getPath('temp'), 'wh-cash-drawer-kick.bin');
 
@@ -1671,51 +1761,25 @@ function kickCashDrawerOnce(shareTarget) {
                 return;
             }
 
-            const target = `\\\\localhost\\${shareTarget}`;
-
-            execFile('cmd.exe', ['/c', 'copy', '/b', tmpFile, target], (err) => {
-                if (err) {
-                    resolve({ success: false, reason: err.message });
-                } else {
-                    resolve({ success: true, target });
-                }
-            });
-        });
-    });
-}
-
-// Caso real (tenant 1, POS-8360 USB/LAN con el cajón por cable): el cliente
-// reportó que al cobrar la última venta el ticket SÍ imprimió pero el cajón
-// NO abrió. El ticket se manda por la vía normal de impresión de Windows
-// (webContents.print con deviceName = printer_name, el *Name* tal cual
-// aparece en Ajustes), pero el pulso del cajón viaja por una ruta UNC
-// aparte (\\localhost\<recurso compartido>) que depende de que esa
-// impresora esté COMPARTIDA en Windows con ese mismo nombre exacto. Si el
-// nombre del recurso compartido (ShareName) quedó distinto del Name --algo
-// común: Windows lo trunca/autogenera, o se compartió después con otro
-// nombre-- el ticket sigue imprimiendo perfecto (usa Name directo) y el
-// cajón nunca recibe el pulso, en silencio: exactamente el síntoma
-// reportado. resolvePrinterShareName() detecta y corrige ese desfase antes
-// de intentar el pulso.
-function resolvePrinterShareName(printerName) {
-    return new Promise((resolve) => {
-        const safeName = String(printerName).replace(/'/g, "''");
-        const psCmd = `Get-Printer -Name '${safeName}' | Select-Object Shared,ShareName | ConvertTo-Json -Compress`;
-
-        execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], { timeout: 5000 }, (err, stdout) => {
-            if (err) {
-                // Get-Printer no disponible/falló: no bloquea, sigue con el
-                // comportamiento de antes (usar printerName tal cual).
-                console.warn(`🗄️ No se pudo consultar "Compartir" de la impresora "${printerName}" (Get-Printer):`, err.message);
-                resolve({ shared: null, shareName: null });
+            try {
+                ensureRawPrintHelperScript();
+            } catch (helperErr) {
+                resolve({ success: false, reason: helperErr.message });
                 return;
             }
-            try {
-                const parsed = JSON.parse(String(stdout).trim());
-                resolve({ shared: !!parsed.Shared, shareName: parsed.ShareName || null });
-            } catch (parseErr) {
-                resolve({ shared: null, shareName: null });
-            }
+
+            execFile(
+                'powershell.exe',
+                ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', RAW_PRINT_HELPER_PS1, '-PrinterName', printerName, '-DataFile', tmpFile],
+                { timeout: 8000 },
+                (err, _stdout, stderr) => {
+                    if (err) {
+                        resolve({ success: false, reason: String(stderr || err.message).trim() });
+                    } else {
+                        resolve({ success: true, target: printerName });
+                    }
+                }
+            );
         });
     });
 }
@@ -1728,40 +1792,26 @@ const CASH_DRAWER_KICK_RETRY_DELAY_MS = 500;
 // esperar el resultado) como el botón manual (que sí necesita avisarle al
 // usuario si falló) puedan usar la misma función. Reintenta una vez ante un
 // fallo transitorio (impresora ocupada procesando el ticket que se acaba de
-// mandar) y corrige el nombre de recurso compartido si Windows lo reporta
-// distinto al configurado en Ajustes.
+// mandar).
 async function kickCashDrawer(printerName) {
     if (!printerName) {
         console.warn('🗄️ No hay impresora configurada en Ajustes -> Impresión; no se puede abrir el cajón.');
         return { success: false, reason: 'no-printer-configured' };
     }
 
-    const shareInfo = await resolvePrinterShareName(printerName);
-    let target = printerName;
-
-    if (shareInfo.shared === false) {
-        console.error(`🗄️ La impresora "${printerName}" NO está compartida en Windows -- el cajón nunca puede abrir así aunque el ticket imprima bien. Compártela (Dispositivos e impresoras -> clic derecho sobre "${printerName}" -> Propiedades de impresora -> pestaña Compartir -> "Compartir esta impresora", dejando el nombre de recurso compartido igual a "${printerName}").`);
-        return { success: false, reason: 'printer-not-shared' };
-    }
-
-    if (shareInfo.shared === true && shareInfo.shareName && shareInfo.shareName !== printerName) {
-        console.warn(`🗄️ La impresora "${printerName}" está compartida con un nombre distinto ("${shareInfo.shareName}"); se usa ese nombre real para el pulso del cajón en vez del configurado en Ajustes.`);
-        target = shareInfo.shareName;
-    }
-
     let lastResult = null;
     for (let attempt = 1; attempt <= CASH_DRAWER_KICK_MAX_ATTEMPTS; attempt++) {
-        lastResult = await kickCashDrawerOnce(target);
+        lastResult = await kickCashDrawerOnce(printerName);
         if (lastResult.success) {
-            console.log(`🗄️ Pulso de apertura de cajón enviado a \\\\localhost\\${target} (intento ${attempt}/${CASH_DRAWER_KICK_MAX_ATTEMPTS}).`);
+            console.log(`🗄️ Pulso de apertura de cajón enviado a "${printerName}" (intento ${attempt}/${CASH_DRAWER_KICK_MAX_ATTEMPTS}).`);
             return { ...lastResult, attempts: attempt };
         }
-        console.warn(`🗄️ Intento ${attempt}/${CASH_DRAWER_KICK_MAX_ATTEMPTS} de abrir el cajón en "${target}" falló: ${lastResult.reason}`);
+        console.warn(`🗄️ Intento ${attempt}/${CASH_DRAWER_KICK_MAX_ATTEMPTS} de abrir el cajón en "${printerName}" falló: ${lastResult.reason}`);
         if (attempt < CASH_DRAWER_KICK_MAX_ATTEMPTS) {
             await new Promise((r) => setTimeout(r, CASH_DRAWER_KICK_RETRY_DELAY_MS));
         }
     }
-    console.error(`🗄️ NO se pudo abrir el cajón (impresora "${printerName}"${target !== printerName ? `, recurso compartido "${target}"` : ''}) tras ${CASH_DRAWER_KICK_MAX_ATTEMPTS} intentos. ¿Está compartida en Windows con ese nombre? Motivo: ${lastResult.reason}`);
+    console.error(`🗄️ NO se pudo abrir el cajón (impresora "${printerName}") tras ${CASH_DRAWER_KICK_MAX_ATTEMPTS} intentos. Motivo: ${lastResult.reason}`);
     return { ...lastResult, attempts: CASH_DRAWER_KICK_MAX_ATTEMPTS };
 }
 

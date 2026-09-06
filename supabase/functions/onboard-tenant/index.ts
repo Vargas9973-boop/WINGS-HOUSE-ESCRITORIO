@@ -17,6 +17,7 @@
 // tenant/branch/users) nunca sale de este proceso ni llega al navegador.
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync } from "node:crypto";
+import { isValidPlanId } from "../_shared/plans.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -105,11 +106,17 @@ Deno.serve(async (req) => {
     const contactPhone = body.contactPhone ? String(body.contactPhone).trim() : null;
     const price = body.price != null && body.price !== "" ? Number(body.price) : 0;
     const billingType = body.billingType || "monthly";
+    // Default 'multisucursal' (todos los módulos) a propósito -- altas
+    // manuales existentes ya asumían acceso completo antes de que planId
+    // existiera; el operador tiene que restringir explícito si el cliente
+    // sí compró un plan más chico.
+    const planId = body.planId != null && body.planId !== "" ? String(body.planId) : "multisucursal";
 
     if (!businessName) return json({ error: "El nombre del negocio es obligatorio." }, 400);
     if (!branchName) return json({ error: "El nombre de la sucursal inicial es obligatorio." }, 400);
     if (!adminEmail) return json({ error: "El correo del administrador es obligatorio." }, 400);
     if (adminPassword.length < 8) return json({ error: "La contraseña debe tener al menos 8 caracteres." }, 400);
+    if (!isValidPlanId(planId)) return json({ error: "Plan inválido." }, 400);
 
     // Periodo de prueba (grace period): si viene trialDays, pisa
     // nextDueDate/billing_status -- el cliente arranca en 'trial' y el
@@ -152,6 +159,7 @@ Deno.serve(async (req) => {
         billing_type: billingType,
         billing_status: billingStatus,
         next_due_date: nextDueDate,
+        plan_id: planId,
       })
       .select()
       .single();

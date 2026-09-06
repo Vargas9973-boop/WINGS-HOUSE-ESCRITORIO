@@ -683,6 +683,11 @@ let __currentSessionCache = null;
 function hasPermission(moduleName, action = 'can_view') {
   const session = __currentSessionCache;
   if (!session) return false;
+  // Gating por plan de renta -- ver requirePermission() en main.js (misma
+  // regla, lado IPC): aplica antes que el rol y sin excepción para 'admin'.
+  // allowedModules null/undefined = sin restricción, nunca bloquea.
+  const allowed = session.allowedModules;
+  if (Array.isArray(allowed) && !allowed.includes(moduleName)) return false;
   if (session.role === 'admin') return true;
   const perms = session.permissions || [];
   const modPerm = perms.find((p) => p.module === moduleName);
@@ -701,6 +706,12 @@ async function guardPermission(moduleName, action = 'can_view') {
     return null;
   }
   __currentSessionCache = session;
+  const allowed = session.allowedModules;
+  if (Array.isArray(allowed) && !allowed.includes(moduleName)) {
+    toast('Este módulo no está incluido en tu plan actual. Contacta a soporte para actualizarlo.', 'error');
+    setTimeout(goHome, 900);
+    return null;
+  }
   if (!hasPermission(moduleName, action)) {
     toast('No tienes permiso para acceder a este módulo.', 'error');
     setTimeout(goHome, 900);

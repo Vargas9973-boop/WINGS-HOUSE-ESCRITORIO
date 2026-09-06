@@ -13,18 +13,21 @@
 //    aquí es solo para el login del sistema de escritorio
 //    (username+password contra public.users, ver supabase/functions/login)
 //    -- la web sigue entrando con Google.
-//  - El plan (precio/tipo de cobro) se resuelve del catálogo PLANS de este
-//    archivo, nunca de lo que mande el body -- si no, cualquiera podría
-//    mandar price:0 en la llamada.
+//  - El plan (precio/tipo de cobro/módulos) se resuelve del catálogo
+//    compartido _shared/plans.ts, nunca de lo que mande el body -- si no,
+//    cualquiera podría mandar price:0 en la llamada. plan_id se guarda en
+//    tenants para que login (Edge Function) sepa qué módulos habilitar
+//    (ver 20260905000000_tenants_plan_id.sql).
 //
-// PRECIOS/PLANES SON PLACEHOLDER -- pendiente de aterrizar (ver
-// conversación con el dueño del proyecto). "Confirmar pago" en el
-// frontend hoy es un botón simulado, no cobra nada de verdad todavía --
+// PRECIOS/MÓDULOS POR PLAN SON PROVISIONALES -- pendiente de aterrizar (ver
+// conversación con el dueño del proyecto, 2026-09-05). "Confirmar pago" en
+// el frontend hoy es un botón simulado, no cobra nada de verdad todavía --
 // por eso billing_status queda 'active' de una vez. Cuando se conecte un
 // procesador real, este es el único lugar que hay que tocar para que el
 // alta quede condicionada a un pago verificado en vez de a un clic.
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync } from "node:crypto";
+import { isValidPlanId, PLAN_CATALOG } from "../_shared/plans.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -41,14 +44,6 @@ function json(body: unknown, status = 200): Response {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
-
-// Mismos ids que el array PLANS en saas-panel/src/pages/Onboarding.jsx
-// (ese lado solo pinta label/precio en pantalla -- la verdad de billing_type
-// y price vive aquí).
-const PLANS: Record<string, { billingType: "monthly" | "license"; price: number }> = {
-  mensual: { billingType: "monthly", price: 1200 },
-  licencia: { billingType: "license", price: 8000 },
-};
 
 // Idéntico a hashPassword()/makeCredentials() en login/index.ts y
 // onboard-tenant/index.ts (scrypt+sal).
@@ -133,8 +128,8 @@ Deno.serve(async (req) => {
 
     if (!businessName) return json({ error: "El nombre del negocio es obligatorio." }, 400);
     if (!branchName) return json({ error: "El nombre de la sucursal inicial es obligatorio." }, 400);
-    const plan = PLANS[planId];
-    if (!plan) return json({ error: "Plan inválido." }, 400);
+    if (!isValidPlanId(planId)) return json({ error: "Plan inválido." }, 400);
+    const plan = PLAN_CATALOG[planId];
 
     // Un negocio por cuenta de Google -- si ya dio de alta uno, no se
     // duplica. El operador puede agregar sucursales extra desde el panel
@@ -154,14 +149,15 @@ Deno.serve(async (req) => {
     }
 
     // Pago simulado (ver comentario de arriba) => el primer ciclo ya queda
-    // "cobrado" desde hoy para mensual; licencia no tiene ciclo que agendar.
-    let nextDueDate: string | null = null;
-    if (plan.billingType === "monthly") {
+    // "cobrado" desde hoy. Los 3 planes son renta mensual (sin opción de
+    // licencia/pago único por ahora, ver conversación con el dueño del
+    // proyecto), así que siempre hay un próximo corte que agendar.
+    const nextDueDate = (() => {
       const d = new Date();
       d.setUTCHours(0, 0, 0, 0);
       d.setUTCMonth(d.getUTCMonth() + 1);
-      nextDueDate = d.toISOString().slice(0, 10);
-    }
+      return d.toISOString().slice(0, 10);
+    })();
 
     // 1. Tenant
     const slug = await uniqueSlug(admin, businessName);
@@ -177,6 +173,7 @@ Deno.serve(async (req) => {
         billing_type: plan.billingType,
         billing_status: "active",
         next_due_date: nextDueDate,
+        plan_id: planId,
       })
       .select()
       .single();

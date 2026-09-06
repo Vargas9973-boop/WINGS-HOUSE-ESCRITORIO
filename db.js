@@ -259,6 +259,12 @@ async function login(username, password) {
     role: data.profile.role,
     roleId: data.profile.roleId,
     permissions: data.profile.permissions || [],
+    // Gating por plan (ver login/index.ts y _shared/plans.ts) -- lista de
+    // módulos que el tenant de este usuario tiene incluidos en su renta.
+    // null/undefined (Edge Function vieja sin desplegar, o falla al
+    // resolver el plan) se trata como "sin restricción" en hasPermission()/
+    // requirePermission(), nunca como "sin módulos".
+    allowedModules: data.profile.allowedModules || null,
     // Solo se usa en main.js cuando la sucursal todavía no se sabía al
     // arrancar (branchId era null arriba) -- para una instalación ya
     // configurada es simplemente el mismo id que ya se tenía.
