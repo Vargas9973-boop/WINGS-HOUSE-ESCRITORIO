@@ -177,12 +177,32 @@ Deno.serve(async (req) => {
       return json({ error: "No se pudo iniciar sesión" }, 500);
     }
 
+    // OJO: NO usar la RPC get_user_permissions aquí -- valida p_user_id
+    // contra current_visible_branch_ids(), que resuelve la sucursal vía
+    // auth.uid(). Este endpoint corre con el cliente de service_role, que no
+    // tiene auth.uid() (es NULL) -- la RPC entonces SIEMPRE lanza "branch
+    // mismatch", capturado abajo, y permissions quedaba en [] en TODO login,
+    // desktop y web (bug real encontrado en la auditoría de 2026-09-06: el
+    // RBAC granular estaba silenciosamente inerte para cualquier rol no
+    // "admin", que sí pasa siempre por el atajo de hasPermission()). Como
+    // este endpoint ya verificó la contraseña de `user` arriba, no hace
+    // falta repetir esa validación -- se consulta role_permissions directo
+    // con el cliente admin (bypassa RLS a propósito, igual que el resto de
+    // esta función).
     let permissions: unknown[] = [];
     try {
-      const { data: permData, error: permErr } = await admin.rpc("get_user_permissions", {
-        p_user_id: user.id,
-      });
-      if (!permErr) permissions = permData || [];
+      // role_id nulo (cuenta legacy sin rol granular asignado, ej. creada
+      // antes de 20260822030000_roles_permissions.sql) -- sin fila que
+      // buscar, [] es el resultado correcto, igual que antes. Evita además
+      // la ambigüedad de .eq('role_id', null) en PostgREST (no siempre
+      // equivale a IS NULL).
+      if (user.role_id != null) {
+        const { data: permData, error: permErr } = await admin
+          .from("role_permissions")
+          .select("module, can_view, can_create, can_edit, can_delete")
+          .eq("role_id", user.role_id);
+        if (!permErr) permissions = permData || [];
+      }
     } catch (_) {
       // login nunca debe fallar por esto -- mismo criterio que db.js.
     }
