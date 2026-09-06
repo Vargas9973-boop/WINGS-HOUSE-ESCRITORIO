@@ -20,14 +20,19 @@
 //    (ver 20260905000000_tenants_plan_id.sql).
 //
 // PRECIOS/MÓDULOS POR PLAN SON PROVISIONALES -- pendiente de aterrizar (ver
-// conversación con el dueño del proyecto, 2026-09-05). "Confirmar pago" en
-// el frontend hoy es un botón simulado, no cobra nada de verdad todavía --
-// por eso billing_status queda 'active' de una vez. Cuando se conecte un
-// procesador real, este es el único lugar que hay que tocar para que el
-// alta quede condicionada a un pago verificado en vez de a un clic.
+// conversación con el dueño del proyecto, 2026-09-05). "Procesar pago" en
+// el frontend crea el negocio de una vez pero billing_status queda
+// 'pending' -- el cobro es transferencia bancaria manual (ver
+// _shared/billing.ts::PAYMENT_INFO), no hay procesador conectado todavía.
+// El SuperAdmin valida el pago a mano viendo su banco (concepto =
+// payment_reference) y recién ahí genera/revela la contraseña real del
+// negocio (wing-house-web/src/pages/Admin.jsx::validatePayment, reusa
+// admin-reset-password). Cuando se conecte un procesador real, este
+// archivo + ese botón son los únicos lugares que hay que tocar.
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync } from "node:crypto";
 import { isValidPlanId, PLAN_CATALOG } from "../_shared/plans.ts";
+import { buildPaymentReference, PAYMENT_INFO } from "../_shared/billing.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -148,10 +153,11 @@ Deno.serve(async (req) => {
       return json({ error: `Ya existe un negocio llamado "${businessName}".` }, 409);
     }
 
-    // Pago simulado (ver comentario de arriba) => el primer ciclo ya queda
-    // "cobrado" desde hoy. Los 3 planes son renta mensual (sin opción de
-    // licencia/pago único por ahora, ver conversación con el dueño del
-    // proyecto), así que siempre hay un próximo corte que agendar.
+    // Primer corte a +1 mes desde hoy, independiente de cuándo se confirme
+    // la transferencia (ver comentario de arriba) -- los 3 planes son renta
+    // mensual (sin opción de licencia/pago único por ahora, ver conversación
+    // con el dueño del proyecto), así que siempre hay un próximo corte que
+    // agendar.
     const nextDueDate = (() => {
       const d = new Date();
       d.setUTCHours(0, 0, 0, 0);
@@ -171,13 +177,27 @@ Deno.serve(async (req) => {
         contact_phone: contactPhone,
         price: plan.price,
         billing_type: plan.billingType,
-        billing_status: "active",
+        // 'pending' -- todavía no hay pago real conectado (ver comentario de
+        // arriba), así que el alta queda esperando a que el dueño del
+        // negocio transfiera y el SuperAdmin lo valide a mano (panel
+        // SuperAdmin -> "Validar pago"), no activa de una vez como antes.
+        billing_status: "pending",
         next_due_date: nextDueDate,
         plan_id: planId,
       })
       .select()
       .single();
     if (tenantErr) throw new Error(`No se pudo crear el negocio: ${tenantErr.message}`);
+
+    // Referencia de pago (concepto de transferencia) -- depende del id real
+    // del tenant, así que se calcula y se guarda DESPUÉS del insert de
+    // arriba (ver nota de la migración 20260905010000). No bloquea el resto
+    // del alta si falla -- el operador siempre puede armarla a mano viendo
+    // el id del tenant.
+    const paymentReference = buildPaymentReference(businessName, tenant.id);
+    const { error: refErr } = await admin
+      .from("tenants").update({ payment_reference: paymentReference }).eq("id", tenant.id);
+    if (refErr) console.error("No se pudo guardar payment_reference:", refErr.message);
 
     // 2. Sucursal inicial
     const { data: branch, error: branchErr } = await admin
@@ -193,10 +213,13 @@ Deno.serve(async (req) => {
 
     // 4. Fila en public.users -- SIN admin.auth.admin.createUser(): el
     // auth.users ya existe (el login con Google que trajo hasta aquí), solo
-    // se enlaza (auth_user_id) y se genera una contraseña propia para el
-    // login del sistema de escritorio (no usa Google).
-    const password = makePassword();
-    const { salt, hash } = makeCredentials(password);
+    // se enlaza (auth_user_id). La contraseña generada aquí es un relleno
+    // que NADIE conoce (no se manda en la respuesta) -- el panel SuperAdmin
+    // genera y revela la contraseña real de verdad al validar el pago (ver
+    // admin-reset-password), no este paso. Todavía hace falta un valor por
+    // el NOT NULL de password_hash/password_salt.
+    const throwawayPassword = makePassword();
+    const { salt, hash } = makeCredentials(throwawayPassword);
     const username = callerEmail.split("@")[0].replace(/[^a-z0-9._-]/gi, "") || `owner${branch.id}`;
     const { data: userRow, error: userInsertErr } = await admin.from("users").insert({
       username,
@@ -217,11 +240,21 @@ Deno.serve(async (req) => {
       { key: "theme_auto", value: "false", branch_id: branch.id },
     ]);
 
+    // Sin adminLogin/username-password en la respuesta a propósito -- el
+    // frontend (Onboarding.jsx) ya no muestra credenciales aquí, muestra
+    // los datos para transferir. Ver nota arriba sobre dónde sí se revela
+    // la contraseña real.
     return json({
       tenant,
       branch,
       kdsSecret,
-      adminLogin: { username: userRow.username, password },
+      payment: {
+        businessName,
+        plan: plan.label,
+        amount: plan.price,
+        reference: paymentReference,
+        ...PAYMENT_INFO,
+      },
     });
   } catch (err) {
     console.error("Error en self-serve-onboard:", err);

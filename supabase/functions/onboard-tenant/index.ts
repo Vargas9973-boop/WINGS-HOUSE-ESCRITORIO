@@ -18,6 +18,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync } from "node:crypto";
 import { isValidPlanId } from "../_shared/plans.ts";
+import { buildPaymentReference } from "../_shared/billing.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -164,6 +165,16 @@ Deno.serve(async (req) => {
       .select()
       .single();
     if (tenantErr) throw new Error(`No se pudo crear el cliente: ${tenantErr.message}`);
+
+    // Referencia de pago (concepto de transferencia) -- misma fórmula que
+    // self-serve-onboard, para que el operador pueda reconciliar cualquier
+    // cliente (alta manual o self-serve) contra su estado de cuenta con el
+    // mismo criterio. No bloquea el resto del alta si falla.
+    const paymentReference = buildPaymentReference(businessName, tenant.id);
+    const { error: refErr } = await admin
+      .from("tenants").update({ payment_reference: paymentReference }).eq("id", tenant.id);
+    if (refErr) console.error("No se pudo guardar payment_reference:", refErr.message);
+    tenant.payment_reference = paymentReference;
 
     // 2. Sucursal inicial
     const { data: branch, error: branchErr } = await admin
