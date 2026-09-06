@@ -23,7 +23,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
-import { maxUsersForPlan, modulesForPlan } from "../_shared/plans.ts";
+import { isValidPlanId, maxUsersForPlan, modulesForPlan, PLAN_CATALOG } from "../_shared/plans.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -192,24 +192,35 @@ Deno.serve(async (req) => {
     // del tenant, resuelto vía branch -> tenant. Cualquier falla acá cae a
     // modulesForPlan(null) (fail-open a plan completo) -- igual que
     // permissions arriba, el login nunca debe romperse por esto.
+    //
+    // A propósito NO se selecciona billing_status aquí -- Ajustes ->
+    // Mantenimiento (desktop) muestra plan y fecha de vencimiento al
+    // cliente, pero el período de gracia (billing_status='past_due', ver
+    // 20260905020000_billing_auto_suspend.sql) es un margen interno que el
+    // cliente no debe conocer de antemano. Ni se calcula ni se manda, así
+    // no hay que acordarse de ocultarlo del lado del cliente.
     let planId: string | null = null;
+    let nextDueDate: string | null = null;
     try {
       const { data: branchRow, error: branchErr } = await admin
         .from("branches")
-        .select("tenant:tenants(plan_id)")
+        .select("tenant:tenants(plan_id, next_due_date)")
         .eq("id", user.branch_id)
         .maybeSingle();
       if (branchErr) {
         console.error("No se pudo resolver el plan del tenant:", branchErr.message);
       } else {
-        const tenant = branchRow?.tenant as { plan_id?: string } | { plan_id?: string }[] | null;
-        planId = Array.isArray(tenant) ? tenant[0]?.plan_id ?? null : tenant?.plan_id ?? null;
+        const tenant = branchRow?.tenant as { plan_id?: string; next_due_date?: string } | { plan_id?: string; next_due_date?: string }[] | null;
+        const tenantRow = Array.isArray(tenant) ? tenant[0] : tenant;
+        planId = tenantRow?.plan_id ?? null;
+        nextDueDate = tenantRow?.next_due_date ?? null;
       }
     } catch (err) {
       console.error("Error inesperado resolviendo el plan del tenant:", err instanceof Error ? err.message : err);
     }
     const allowedModules = modulesForPlan(planId);
     const maxUsers = maxUsersForPlan(planId);
+    const planLabel = isValidPlanId(planId) ? PLAN_CATALOG[planId].label : null;
 
     return json({
       session: {
@@ -227,6 +238,8 @@ Deno.serve(async (req) => {
         branchId: user.branch_id,
         permissions,
         planId,
+        planLabel,
+        nextDueDate,
         allowedModules,
         maxUsers,
       },

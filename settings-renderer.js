@@ -529,6 +529,19 @@ function renderMaintInfo(info) {
   document.getElementById('maint-last-check').textContent = fmtLastCheck(info.lastCheckedAt);
 }
 
+// Plan y fecha de vencimiento vienen de la sesión (login::planLabel/
+// nextDueDate, ver supabase/functions/login/index.ts) -- a propósito NO se
+// manda ni se muestra el período de gracia: el cliente solo ve su fecha de
+// vencimiento contratada, nunca que hay unos días extra antes de que lo
+// suspendan (eso es un margen interno, no algo que deba saber de antemano).
+function renderPlanInfo(session) {
+  document.getElementById('maint-plan').textContent = session?.planLabel || '—';
+  const due = session?.nextDueDate;
+  document.getElementById('maint-due-date').textContent = due
+    ? new Date(`${due}T00:00:00`).toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' })
+    : '—';
+}
+
 function renderConnection(connected) {
   const el = document.getElementById('maint-connection');
   el.className = connected ? 'status-indicator connected' : 'status-indicator disconnected';
@@ -550,6 +563,12 @@ async function loadMaintenancePanel() {
     renderMaintInfo(await window.systemAPI.getInfo());
   } catch (err) {
     console.error('No se pudo leer la información del sistema:', err);
+  }
+
+  try {
+    renderPlanInfo(await window.auth.getSession());
+  } catch (err) {
+    console.error('No se pudo leer el plan de la sesión:', err);
   }
 
   try {

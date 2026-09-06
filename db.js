@@ -269,6 +269,11 @@ async function login(username, password) {
     // requirePermission()/users:create en main.js, que es quien realmente
     // lo hace cumplir contra countActiveUsers().
     maxUsers: data.profile.maxUsers ?? null,
+    // Solo para pintar en Ajustes -> Mantenimiento (settings-renderer.js)
+    // -- deliberadamente no incluye billing_status/período de gracia, ver
+    // comentario en login/index.ts.
+    planLabel: data.profile.planLabel || null,
+    nextDueDate: data.profile.nextDueDate || null,
     // Solo se usa en main.js cuando la sucursal todavía no se sabía al
     // arrancar (branchId era null arriba) -- para una instalación ya
     // configurada es simplemente el mismo id que ya se tenía.
