@@ -871,8 +871,18 @@ function registerIpcHandlers() {
     return db.getAllUsers();
   });
 
-  safeHandle('users:create', (data) => {
+  safeHandle('users:create', async (data) => {
     requirePermission('cuentas', 'can_create');
+    // Límite de cuentas por plan (ver login/index.ts::maxUsers,
+    // _shared/plans.ts) -- cuenta TODAS las cuentas activas de la sucursal,
+    // incluido el dueño/admin. null = sin límite (plan Multisucursal).
+    const maxUsers = currentSession.maxUsers;
+    if (maxUsers != null) {
+      const activeCount = await db.countActiveUsers();
+      if (activeCount >= maxUsers) {
+        throw new Error(`Tu plan permite hasta ${maxUsers} usuarios. Desactiva alguno o actualiza tu plan para agregar más.`);
+      }
+    }
     return db.createUser(data);
   });
 

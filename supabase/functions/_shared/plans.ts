@@ -10,24 +10,31 @@ export type PlanId = "esencial" | "operacion_completa" | "multisucursal";
 
 export const PLAN_IDS: PlanId[] = ["esencial", "operacion_completa", "multisucursal"];
 
-export const PLAN_CATALOG: Record<PlanId, { label: string; price: number; billingType: "monthly"; description: string }> = {
+// maxUsers: null = sin límite. Cuenta TODAS las filas en public.users de la
+// sucursal (incluye al dueño/admin creado en el alta) -- no es "3 empleados
+// además del dueño", es "3 cuentas en total", más simple de explicar y de
+// hacer cumplir (ver requirePermission/users:create en main.js).
+export const PLAN_CATALOG: Record<PlanId, { label: string; price: number; billingType: "monthly"; description: string; maxUsers: number | null }> = {
   esencial: {
     label: "Esencial",
     price: 549,
     billingType: "monthly",
     description: "1 sucursal, hasta 3 usuarios (ej. gerente, mesero, cajero). Ventas, comandas, catálogo, corte de caja, inventario, historial y cuentas.",
+    maxUsers: 3,
   },
   operacion_completa: {
     label: "Operación Completa",
     price: 899,
     billingType: "monthly",
     description: "Hasta 6 usuarios. Agrega cocina (KDS), costos y reportes avanzados.",
+    maxUsers: 6,
   },
   multisucursal: {
     label: "Multisucursal",
     price: 1499,
     billingType: "monthly",
     description: "Usuarios ilimitados y acceso a todos los módulos (nómina, asistencia). Sigue siendo 1 sucursal -- sucursales adicionales se cotizan aparte.",
+    maxUsers: null,
   },
 };
 
@@ -57,4 +64,11 @@ export function isValidPlanId(value: unknown): value is PlanId {
 export function modulesForPlan(planId: string | null | undefined): string[] {
   if (isValidPlanId(planId)) return PLAN_MODULES[planId];
   return MULTISUCURSAL_MODULES;
+}
+
+// Mismo criterio fail-open que modulesForPlan(): plan_id nulo/desconocido
+// -> null (sin límite), nunca bloquea por un dato faltante o viejo.
+export function maxUsersForPlan(planId: string | null | undefined): number | null {
+  if (isValidPlanId(planId)) return PLAN_CATALOG[planId].maxUsers;
+  return null;
 }

@@ -23,7 +23,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { scryptSync, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
-import { modulesForPlan } from "../_shared/plans.ts";
+import { maxUsersForPlan, modulesForPlan } from "../_shared/plans.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -209,6 +209,7 @@ Deno.serve(async (req) => {
       console.error("Error inesperado resolviendo el plan del tenant:", err instanceof Error ? err.message : err);
     }
     const allowedModules = modulesForPlan(planId);
+    const maxUsers = maxUsersForPlan(planId);
 
     return json({
       session: {
@@ -227,6 +228,7 @@ Deno.serve(async (req) => {
         permissions,
         planId,
         allowedModules,
+        maxUsers,
       },
     });
   } catch (err) {

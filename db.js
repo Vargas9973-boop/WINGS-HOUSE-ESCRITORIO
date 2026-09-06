@@ -265,6 +265,10 @@ async function login(username, password) {
     // resolver el plan) se trata como "sin restricción" en hasPermission()/
     // requirePermission(), nunca como "sin módulos".
     allowedModules: data.profile.allowedModules || null,
+    // Límite de cuentas del plan (null = sin límite) -- ver
+    // requirePermission()/users:create en main.js, que es quien realmente
+    // lo hace cumplir contra countActiveUsers().
+    maxUsers: data.profile.maxUsers ?? null,
     // Solo se usa en main.js cuando la sucursal todavía no se sabía al
     // arrancar (branchId era null arriba) -- para una instalación ya
     // configurada es simplemente el mismo id que ya se tenía.
@@ -363,6 +367,20 @@ async function resolveRoleForUser(roleId, fallbackRoleText) {
     return { roleId: role.id, roleText: role.name.toLowerCase() };
   }
   return { roleId: null, roleText: fallbackRoleText || 'cajero' };
+}
+
+// Cuenta TODAS las cuentas activas de esta sucursal (incluye al dueño/admin)
+// contra el límite del plan (ver users:create en main.js) -- desactivadas
+// (removeUser hace soft-delete con active:false) no cuentan, ya no ocupan
+// un lugar de verdad.
+async function countActiveUsers() {
+  const { count, error } = await supabase
+    .from('users')
+    .select('id', { count: 'exact', head: true })
+    .eq('branch_id', getCurrentBranchId())
+    .eq('active', true);
+  must(error, 'No se pudo contar los usuarios activos');
+  return count || 0;
 }
 
 async function createUser(data) {
@@ -3388,6 +3406,7 @@ module.exports = {
   changePassword,
   getAllUsers,
   createUser,
+  countActiveUsers,
   updateUser,
   removeUser,
   // productos
