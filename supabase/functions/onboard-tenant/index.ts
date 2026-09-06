@@ -105,12 +105,31 @@ Deno.serve(async (req) => {
     const contactPhone = body.contactPhone ? String(body.contactPhone).trim() : null;
     const price = body.price != null && body.price !== "" ? Number(body.price) : 0;
     const billingType = body.billingType || "monthly";
-    const nextDueDate = body.nextDueDate || null;
 
     if (!businessName) return json({ error: "El nombre del negocio es obligatorio." }, 400);
     if (!branchName) return json({ error: "El nombre de la sucursal inicial es obligatorio." }, 400);
     if (!adminEmail) return json({ error: "El correo del administrador es obligatorio." }, 400);
     if (adminPassword.length < 8) return json({ error: "La contraseña debe tener al menos 8 caracteres." }, 400);
+
+    // Periodo de prueba (grace period): si viene trialDays, pisa
+    // nextDueDate/billing_status -- el cliente arranca en 'trial' y el
+    // primer cobro (renta mensual o licencia) queda agendado para
+    // hoy + trialDays. Se calcula con la fecha del servidor (no la del
+    // navegador del superadmin) para que quede consistente con las alertas
+    // de vencimiento que ya usa el panel (Admin.jsx::dueUrgency).
+    let billingStatus = "active";
+    let nextDueDate = body.nextDueDate || null;
+    if (body.trialDays != null && body.trialDays !== "") {
+      const trialDays = Number(body.trialDays);
+      if (!Number.isInteger(trialDays) || trialDays < 0) {
+        return json({ error: "trialDays debe ser un número entero >= 0." }, 400);
+      }
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      end.setUTCDate(end.getUTCDate() + trialDays);
+      nextDueDate = end.toISOString().slice(0, 10);
+      billingStatus = trialDays > 0 ? "trial" : "active";
+    }
 
     const { data: existingTenant, error: existErr } = await admin
       .from("tenants").select("id").eq("name", businessName).maybeSingle();
@@ -131,6 +150,7 @@ Deno.serve(async (req) => {
         contact_phone: contactPhone,
         price,
         billing_type: billingType,
+        billing_status: billingStatus,
         next_due_date: nextDueDate,
       })
       .select()
